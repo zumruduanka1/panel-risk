@@ -114,7 +114,7 @@ def analyze():
 
     # 🚨 Risk yüksekse mail gönder
     if score > 70:
-        send_email("ALICI_MAIL")
+        send_email("rumeyysauslu@gmail.com")
 
     return result
 
@@ -162,8 +162,8 @@ def social():
 # ---------------- EMAIL ----------------
 def send_email(to):
     try:
-        sender = "MAILIN"
-        password = "APP_PASSWORD"
+        sender = "tubitaktest0@gmail.com"  # Burada kendi mail adresini yaz
+        password = "tubitaktest0@gmail.com"  # Gmail App Password kullan
 
         message = "Subject: Risk Uyarısı\n\nYüksek riskli haber tespit edildi!"
 
@@ -295,4 +295,4 @@ def home():
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
-    app.run()
+    app.run(debug=True)
