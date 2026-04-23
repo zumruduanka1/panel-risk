@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request, render_template_string
 import requests
 import difflib
 import smtplib
+import os
 
 app = Flask(__name__)
 
@@ -33,8 +34,12 @@ def fake_score(text):
 # ---------------- EMAIL ----------------
 def send_email(to):
     try:
-        sender = "tubitaktest0@gmail.com"
-        password = "umdyxtmpeljhodhy"
+        sender = os.getenv("tubitaktest0@gmail.com")
+        password = os.getenv("umdyxtmpeljhodhy")
+
+        if not sender or not password:
+            print("Email env tanımlı değil")
+            return
 
         message = "Subject: Risk Uyarısı\n\nYüksek riskli içerik tespit edildi!"
 
@@ -57,14 +62,15 @@ def analyze():
     data["news"].append(result)
 
     if score > 70:
-        send_email("rumeyysauslu@gmail.com")  # mail buraya
+        send_email("rumeyysauslu@gmail.com")
 
     return result
 
-# ---------------- NEWS (TR) ----------------
+# ---------------- NEWS ----------------
 @app.route("/api/news")
 def news():
-    url = "https://newsapi.org/v2/top-headlines?country=tr&apiKey=YOUR_API_KEY"
+    api_key = os.getenv("NEWS_API_KEY")
+    url = f"https://newsapi.org/v2/top-headlines?country=tr&apiKey={api_key}"
 
     try:
         res = requests.get(url).json()
