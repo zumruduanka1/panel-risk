@@ -1,12 +1,12 @@
 from flask import Flask, request, jsonify, render_template_string
-import requests, smtplib, os, hashlib
+import requests, smtplib, os, hashlib, time
 import xml.etree.ElementTree as ET
-import random
 
 app = Flask(__name__)
 
 news_cache = []
 stats = {"total": 0, "high": 0}
+last_update = 0
 sent = set()
 
 # ---------------- EMAIL ----------------
@@ -15,7 +15,6 @@ def send_email(text, risk):
         s = smtplib.SMTP("smtp.gmail.com", 587)
         s.starttls()
         s.login(os.getenv("tubitaktest0@gmail.com"), os.getenv("umdyxtmpeljhodhy"))
-
         msg = f"Subject: 🚨 Yüksek Risk\n\n{text}\nRisk: {risk}"
         s.sendmail(os.getenv("tubitaktest0@gmail.com"), os.getenv("rumeyysauslu@gmail.com"), msg)
         s.quit()
@@ -31,48 +30,55 @@ def parse(url):
     except:
         return []
 
-# ---------------- GÜÇLÜ FALLBACK ----------------
-def fallback_news():
-    return [
-        "SON DAKİKA ŞOK HABER HERKES PAYLAŞIYOR",
-        "İnanılmaz gizli gerçek ortaya çıktı",
-        "Acil paylaşılması gereken haber",
-        "Herkes bunu konuşuyor büyük iddia",
-        "Gizemli olay Türkiye'de yaşandı",
-        "Şok gelişme ortaya çıktı uzmanlar şaşkın"
-    ]
-
-# ---------------- KAYNAK ----------------
+# ---------------- YALAN HABER KAYNAKLARI ----------------
 def get_news():
     data = []
+
+    # teyit siteleri (en önemli)
     data += parse("https://teyit.org/feed")
     data += parse("https://www.dogrulukpayi.com/rss.xml")
+    data += parse("https://malumatfurus.org/feed")
+
+    # sosyal medya etkisi
     data += parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr")
 
-    if len(data) < 3:
-        data = fallback_news()
+    # fallback
+    if len(data) < 5:
+        data += [
+            "ŞOK HABER herkes paylaşıyor gizli gerçek ortaya çıktı",
+            "ACİL bu haberi silmeden önce oku",
+            "İnanılmaz olay sosyal medyada yayıldı"
+        ]
 
     return data
 
 # ---------------- RISK ----------------
 def calc_risk(text):
-    score = 20
+    score = 30
     t = text.lower()
 
-    if any(x in t for x in ["şok","inanılmaz","acil","ifşa","gizli","iddia"]):
-        score += 30
+    viral = ["şok","inanılmaz","acil","ifşa","gizli","iddia","herkes"]
+
+    for v in viral:
+        if v in t:
+            score += 15
 
     if "!" in text:
         score += 10
 
-    if len(text) < 30:
+    if len(text) < 40:
         score += 10
 
     return min(score, 100)
 
-# ---------------- ANALYZE ----------------
+# ---------------- REFRESH ----------------
 def refresh():
-    global news_cache, stats
+    global news_cache, stats, last_update
+
+    if time.time() - last_update < 30:
+        return
+
+    last_update = time.time()
 
     data = []
     total = 0
@@ -91,11 +97,6 @@ def refresh():
             if key not in sent:
                 send_email(n, r)
                 sent.add(key)
-
-    # boş kalmasın diye random da ekle
-    if len(data) == 0:
-        for n in fallback_news():
-            data.append({"title": n, "risk": random.randint(60, 90)})
 
     news_cache = data[:20]
     stats = {"total": total, "high": high}
@@ -131,7 +132,7 @@ body {background:#0f172a;color:white;font-family:Arial;padding:20px;}
 
 <body>
 
-<h1>🚨 Yalan Haber Dashboard</h1>
+<h1>🚨 Yalan Haber Paneli</h1>
 
 <p>Analiz: <span id="t">0</span> | 80+: <span id="h">0</span></p>
 
@@ -141,7 +142,7 @@ body {background:#0f172a;color:white;font-family:Arial;padding:20px;}
 <h3 id="r"></h3>
 <canvas id="c"></canvas>
 
-<h2>🔥 Riskli Haberler</h2>
+<h2>🔥 Yüksek Riskli Haberler</h2>
 <div id="news"></div>
 
 <script>
@@ -182,7 +183,7 @@ async function load(){
  news.innerHTML=html;
 }
 
-setInterval(load,4000);
+setInterval(load,5000);
 load();
 </script>
 
