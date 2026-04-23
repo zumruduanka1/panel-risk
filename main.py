@@ -1,17 +1,16 @@
-from flask import Flask, jsonify, request, render_template_string
+from flask import Flask, request, jsonify, render_template_string
 import requests
-import difflib
 import smtplib
 import os
 
 app = Flask(__name__)
 
-data = {"news": []}
+history = []
 
-# ---------------- RISK SCORE ----------------
+# ---------------- RISK ENGINE ----------------
 def fake_score(text):
     score = 0
-    text = text.lower()
+    text_low = text.lower()
 
     keywords = [
         "şok", "son dakika", "inanılmaz", "öldü",
@@ -20,14 +19,19 @@ def fake_score(text):
     ]
 
     for k in keywords:
-        if k in text:
+        if k in text_low:
             score += 15
 
     if text.isupper():
         score += 20
 
-    if len(text) < 25:
+    if len(text) < 20:
         score += 10
+
+    # basit benzerlik (aynı içerik spam)
+    for h in history:
+        if text_low in h["text"].lower():
+            score += 10
 
     return min(score, 100)
 
@@ -38,10 +42,10 @@ def send_email(to):
         password = os.getenv("umdyxtmpeljhodhy")
 
         if not sender or not password:
-            print("Email env tanımlı değil")
+            print("mail ayarı yok")
             return
 
-        message = "Subject: Risk Uyarısı\n\nYüksek riskli içerik tespit edildi!"
+        message = "Subject: Risk Uyarısı\n\nYüksek riskli içerik bulundu!"
 
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
@@ -59,7 +63,7 @@ def analyze():
     score = fake_score(text)
 
     result = {"text": text, "risk": score}
-    data["news"].append(result)
+    history.append(result)
 
     if score > 70:
         send_email("rumeyysauslu@gmail.com")
@@ -69,26 +73,23 @@ def analyze():
 # ---------------- NEWS ----------------
 @app.route("/api/news")
 def news():
-    api_key = os.getenv("NEWS_API_KEY")
-    url = f"https://newsapi.org/v2/top-headlines?country=tr&apiKey={api_key}"
+    key = os.getenv("NEWS_API_KEY")
+    url = f"https://newsapi.org/v2/top-headlines?country=tr&apiKey={key}"
 
     try:
         res = requests.get(url).json()
         articles = res.get("articles", [])[:5]
 
-        result = []
-        for a in articles:
-            title = a.get("title", "")
-            result.append({
-                "title": title,
-                "risk": fake_score(title)
-            })
-
-        return {"news": result}
+        return {
+            "news": [
+                {"title": a["title"], "risk": fake_score(a["title"])}
+                for a in articles
+            ]
+        }
     except:
         return {"news": []}
 
-# ---------------- GOOGLE TRENDS ----------------
+# ---------------- TRENDS ----------------
 @app.route("/api/trends")
 def trends():
     url = "https://trends.google.com/trends/trendingsearches/daily/rss?geo=TR"
@@ -97,11 +98,7 @@ def trends():
         res = requests.get(url).text
         items = res.split("<title>")[1:10]
 
-        trend_list = []
-        for i in items:
-            trend_list.append(i.split("</title>")[0])
-
-        return {"trends": trend_list}
+        return {"trends": [i.split("</title>")[0] for i in items]}
     except:
         return {"trends": []}
 
@@ -109,20 +106,26 @@ def trends():
 @app.route("/panel")
 def panel():
     return render_template_string("""
-    <h1>Sosyal Medya Risk Paneli</h1>
+    <h1>📊 Sosyal Medya Risk Paneli</h1>
 
     <input id="txt" placeholder="Haber gir">
     <button onclick="analyze()">Analiz</button>
 
-    <p id="res"></p>
+    <h2 id="res"></h2>
 
-    <h2>Türkçe Haberler</h2>
+    <canvas id="chart" width="400" height="200"></canvas>
+
+    <h3>Türkçe Haberler</h3>
     <div id="news"></div>
 
-    <h2>Trendler</h2>
+    <h3>Trendler</h3>
     <div id="trends"></div>
 
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
     <script>
+    let chart;
+
     async function analyze(){
         let t = document.getElementById("txt").value;
 
@@ -133,7 +136,27 @@ def panel():
         });
 
         let j = await r.json();
+
         document.getElementById("res").innerText = "Risk: " + j.risk;
+
+        drawChart(j.risk);
+    }
+
+    function drawChart(risk){
+        const ctx = document.getElementById('chart');
+
+        if(chart) chart.destroy();
+
+        chart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['Risk'],
+                datasets: [{
+                    label: 'Risk Skoru',
+                    data: [risk]
+                }]
+            }
+        });
     }
 
     async function loadNews(){
