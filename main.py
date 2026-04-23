@@ -4,47 +4,45 @@ import difflib
 import xml.etree.ElementTree as ET
 import smtplib
 import os
+import hashlib
 
 app = Flask(__name__)
 
 # ---------------- EMAIL ----------------
-def send_email(content):
+def send_email(subject, content):
     try:
         sender = os.getenv("tubitaktest0@gmail.com")
         password = os.getenv("umdyxtmpeljhodhy")
+        receiver = os.getenv("rumeyysauslu@gmail.com")
 
-        if not sender or not password:
-            print("Email ayarlanmadı")
+        if not sender or not password or not receiver:
+            print("EMAIL ENV eksik")
             return
 
-        msg = f"""Subject: 🚨 Yüksek Riskli Haber Bulundu
+        msg = f"Subject: {subject}\n\n{content}"
 
-Aşağıdaki içerik yüksek riskli:
-
-{content}
-"""
-
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(sender, password)
-        server.sendmail(sender, "rumeyysauslu@gmail.com", msg)
-        server.quit()
+        s = smtplib.SMTP("smtp.gmail.com", 587)
+        s.starttls()
+        s.login(sender, password)
+        s.sendmail(sender, receiver, msg)
+        s.quit()
 
         print("MAIL GÖNDERİLDİ")
 
     except Exception as e:
-        print("Mail hata:", e)
+        print("mail hata:", e)
 
 # ---------------- RSS ----------------
 def parse_rss(url):
     try:
-        r = requests.get(url, timeout=5)
+        r = requests.get(url, timeout=6)
         root = ET.fromstring(r.content)
 
         data = []
         for item in root.findall(".//item")[:20]:
             title = item.find("title").text
-            data.append(title)
+            if title:
+                data.append(title)
 
         return data
     except:
@@ -52,35 +50,38 @@ def parse_rss(url):
 
 # ---------------- KAYNAKLAR ----------------
 def get_news():
-    teyit = parse_rss("https://teyit.org/feed")
-    dogruluk = parse_rss("https://www.dogrulukpayi.com/rss.xml")
-    google = parse_rss("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr")
+    return (
+        parse_rss("https://teyit.org/feed") +
+        parse_rss("https://www.dogrulukpayi.com/rss.xml") +
+        parse_rss("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr")
+    )
 
-    return teyit + dogruluk + google
+# ---------------- HABER Mİ ----------------
+def is_news_like(text):
+    keywords = ["haber","son dakika","iddia","paylaş","gündem"]
+    return any(k in text.lower() for k in keywords)
 
 # ---------------- RISK ----------------
 def calc_risk(text):
+    if not is_news_like(text):
+        return 0, ["Haber formatı değil"]
+
     score = 0
     reasons = []
-
     t = text.lower()
 
-    viral = [
-        "şok","son dakika","inanılmaz","öldü",
-        "ifşa","gizli","acil","hemen paylaş",
-        "herkes bunu konuşuyor"
-    ]
+    viral = ["şok","inanılmaz","öldü","ifşa","gizli","acil","hemen paylaş"]
 
     for w in viral:
         if w in t:
-            score += 15
-            reasons.append("Abartı / sosyal medya dili")
+            score += 20
+            reasons.append("Sosyal medya abartı dili")
 
     if "!" in text or text.isupper():
         score += 10
         reasons.append("Clickbait")
 
-    if len(text) < 25:
+    if len(text) < 30:
         score += 10
         reasons.append("Kısa içerik")
 
@@ -94,24 +95,42 @@ def calc_risk(text):
 
     return min(score, 100), reasons
 
+# ---------------- MAIL SPAM ENGEL ----------------
+sent_cache = set()
+
+def send_if_high_risk(title, risk):
+    if risk < 80:
+        return
+
+    key = hashlib.md5(title.encode()).hexdigest()
+
+    if key in sent_cache:
+        return
+
+    send_email(
+        "🚨 Yüksek Riskli Haber",
+        f"Haber:\n{title}\n\nRisk: {risk}"
+    )
+
+    sent_cache.add(key)
+
 # ---------------- KAYNAK ANALİZ ----------------
 def analyze_news():
     news = get_news()
     result = []
 
-    for n in news[:15]:
+    for n in news[:25]:
         risk, reasons = calc_risk(n)
 
-        if risk > 60:
+        if risk >= 50:  # ✅ BURASI DEĞİŞTİ
             result.append({
                 "title": n,
                 "risk": risk,
                 "reasons": reasons
             })
 
-            # 🔴 yüksek riskte mail
-            if risk > 80:
-                send_email(n)
+            # 🔴 sadece 80+ mail
+            send_if_high_risk(n, risk)
 
     return result
 
@@ -121,8 +140,11 @@ def analyze():
     text = request.json.get("text","")
     risk, reasons = calc_risk(text)
 
-    if risk > 80:
-        send_email(text)
+    if risk >= 80:
+        send_email(
+            "🚨 Kullanıcı Yüksek Riskli İçerik",
+            f"Metin:\n{text}\n\nRisk: {risk}"
+        )
 
     return {"risk": risk, "reasons": reasons}
 
@@ -142,27 +164,28 @@ def home():
 
 <style>
 body {background:#0f172a;color:white;font-family:Arial;padding:20px;}
-.card {background:#1e293b;padding:10px;margin:10px;border-radius:8px;}
+.card {background:#1e293b;padding:10px;margin:8px;border-radius:8px;}
 .high {border-left:5px solid red;}
 .medium {border-left:5px solid orange;}
-input {padding:10px;width:300px;}
-button {padding:10px;background:red;color:white;border:none;}
+input {padding:8px;width:260px;}
+button {padding:8px;background:red;color:white;border:none;}
+canvas {max-width:220px;margin-top:10px;}
 </style>
 </head>
 
 <body>
 
-<h1>🚨 Sosyal Medya Yalan Haber Paneli</h1>
+<h2>🚨 Yalan Haber Risk Paneli</h2>
 
-<input id="txt" placeholder="Metin gir">
+<input id="txt" placeholder="Haber gir">
 <button onclick="analyze()">Analiz</button>
 
-<h2 id="risk"></h2>
+<h3 id="risk"></h3>
 <ul id="reasons"></ul>
 
 <canvas id="chart"></canvas>
 
-<h2>🔥 Yüksek Riskli Haberler</h2>
+<h3>🔥 Riskli Kaynak Haberler (50+)</h3>
 <div id="news"></div>
 
 <script>
@@ -208,7 +231,7 @@ async function loadNews(){
 
     let html="";
     j.data.forEach(n=>{
-        let cls = n.risk > 80 ? "high" : "medium";
+        let cls = n.risk >= 80 ? "high" : "medium";
 
         html+=`
         <div class="card ${cls}">
@@ -222,7 +245,7 @@ async function loadNews(){
     document.getElementById("news").innerHTML=html;
 }
 
-setInterval(loadNews,5000);
+setInterval(loadNews,7000);
 loadNews();
 
 </script>
