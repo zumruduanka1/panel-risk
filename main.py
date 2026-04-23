@@ -160,10 +160,10 @@ def social():
         return {"trends": []}
 
 # ---------------- EMAIL ----------------
-def send_email(rumeyysauslu@gmail.com):
+def send_email(to):
     try:
-        sender = "tubitaktest0@gmail.com"
-        password = "umdyxtmpeljhodhy"
+        sender = "MAILIN"
+        password = "APP_PASSWORD"
 
         message = "Subject: Risk Uyarısı\n\nYüksek riskli haber tespit edildi!"
 
