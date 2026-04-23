@@ -162,8 +162,8 @@ def social():
 # ---------------- EMAIL ----------------
 def send_email(to):
     try:
-        sender = "tubitaktest0@gmail.com"  # Burada kendi mail adresini yaz
-        password = "tubitaktest0@gmail.com"  # Gmail App Password kullan
+        sender = "tubitaktest0@gmail.com""  
+        password = "umdyxtmpeljhodhy"  
 
         message = "Subject: Risk Uyarısı\n\nYüksek riskli haber tespit edildi!"
 
@@ -172,8 +172,8 @@ def send_email(to):
         server.login(sender, password)
         server.sendmail(sender, to, message)
         server.quit()
-    except:
-        pass
+    except Exception as e:
+        print(f"Mail gönderme hatası: {e}")
 
 # ---------------- PANEL ----------------
 @app.route("/panel")
