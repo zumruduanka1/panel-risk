@@ -88,7 +88,7 @@ def logout():
     return redirect("/")
 
 # ---------------- EMAIL ----------------
-def send_email(to):
+def send_email(rumeyysauslu@gmail.com):
     try:
         sender = "tubitaktest0@gmail.com"   # BURAYA kendi mailini yaz
         password = "umdyxtmpeljhodhy"          # Gmail App Password
@@ -124,7 +124,6 @@ def analyze():
 
     # 🚨 yüksek riskte mail
     if score > 70:
-        send_email("rumeyysauslu@gmail.com")  # BURAYA alıcı mail
 
     return result
 
