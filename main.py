@@ -1,31 +1,10 @@
-from flask import Flask, jsonify, request, render_template_string, session, redirect
-import sqlite3
+from flask import Flask, jsonify, request, render_template_string
 import requests
 import difflib
 import smtplib
 
 app = Flask(__name__)
-app.secret_key = "secret123"
 
-# ---------------- DATABASE ----------------
-def init_db():
-    conn = sqlite3.connect("db.sqlite")
-    c = conn.cursor()
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT,
-        password TEXT
-    )
-    """)
-
-    conn.commit()
-    conn.close()
-
-init_db()
-
-# ---------------- DATA ----------------
 data = {"news": []}
 
 # ---------------- FAKE SCORE ----------------
@@ -42,58 +21,19 @@ def fake_score(text):
     if text.isupper():
         score += 20
 
-    if len(text) < 20:
-        score += 10
-
     return min(score, 100)
 
 # ---------------- SIMILARITY ----------------
 def similarity(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio()
 
-# ---------------- AUTH ----------------
-@app.route("/register", methods=["POST"])
-def register():
-    u = request.json["username"]
-    p = request.json["password"]
-
-    conn = sqlite3.connect("db.sqlite")
-    c = conn.cursor()
-    c.execute("INSERT INTO users (username, password) VALUES (?,?)", (u, p))
-    conn.commit()
-    conn.close()
-
-    return {"ok": True}
-
-@app.route("/login", methods=["POST"])
-def login():
-    u = request.json["username"]
-    p = request.json["password"]
-
-    conn = sqlite3.connect("db.sqlite")
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE username=? AND password=?", (u, p))
-    user = c.fetchone()
-    conn.close()
-
-    if user:
-        session["user"] = u
-        return {"ok": True}
-
-    return {"ok": False}
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect("/")
-
 # ---------------- EMAIL ----------------
-def send_email(rumeyysauslu@gmail.com):
+def send_email(to):
     try:
-        sender = "tubitaktest0@gmail.com"   # BURAYA kendi mailini yaz
-        password = "umdyxtmpeljhodhy"          # Gmail App Password
+        sender = "tubitaktest0@gmail.com"   # kendi mailin
+        password = "umdyxtmpeljhodhy"          # gmail app password
 
-        message = "Subject: Risk Uyarısı\n\nYüksek riskli haber tespit edildi!"
+        message = "Subject: Risk Uyarısı\n\nYüksek riskli haber bulundu!"
 
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
@@ -101,7 +41,7 @@ def send_email(rumeyysauslu@gmail.com):
         server.sendmail(sender, to, message)
         server.quit()
     except Exception as e:
-        print("Mail hata:", e)
+        print("mail hata:", e)
 
 # ---------------- ANALYZE ----------------
 @app.route("/api/analyze", methods=["POST"])
@@ -109,27 +49,22 @@ def analyze():
     text = request.json.get("text", "")
     score = fake_score(text)
 
-    similar_news = []
-    for n in data["news"]:
-        if similarity(text, n["text"]) > 0.6:
-            similar_news.append(n)
-
     result = {
         "text": text,
-        "risk": score,
-        "similar": similar_news
+        "risk": score
     }
 
     data["news"].append(result)
 
-    # 🚨 yüksek riskte mail
+    # yüksek riskte mail
     if score > 70:
+        send_email("rumeyysauslu@gmail.com")
 
     return result
 
 # ---------------- NEWS ----------------
 @app.route("/api/news")
-def get_news():
+def news():
     url = "https://newsapi.org/v2/top-headlines?country=tr&apiKey=YOUR_API_KEY"
 
     try:
@@ -148,43 +83,23 @@ def get_news():
     except:
         return {"news": []}
 
-# ---------------- TRENDS ----------------
-@app.route("/api/trends")
-def trends():
-    url = "https://trends.google.com/trends/trendingsearches/daily/rss?geo=TR"
-
-    try:
-        res = requests.get(url).text
-        items = res.split("<title>")[1:6]
-
-        data_list = []
-        for i in items:
-            data_list.append(i.split("</title>")[0])
-
-        return {"trends": data_list}
-    except:
-        return {"trends": []}
-
 # ---------------- PANEL ----------------
 @app.route("/panel")
 def panel():
     return render_template_string("""
     <h1>Risk Panel</h1>
 
-    <input id="text">
-    <button onclick="send()">Analiz</button>
+    <input id="txt">
+    <button onclick="gonder()">Analiz</button>
 
     <p id="res"></p>
 
     <h2>Haberler</h2>
     <div id="news"></div>
 
-    <h2>Trendler</h2>
-    <div id="trends"></div>
-
     <script>
-    async function send(){
-        let t = document.getElementById("text").value;
+    async function gonder(){
+        let t = document.getElementById("txt").value;
 
         let r = await fetch("/api/analyze",{
             method:"POST",
@@ -196,7 +111,7 @@ def panel():
         document.getElementById("res").innerText = "Risk: " + j.risk;
     }
 
-    async function loadNews(){
+    async function load(){
         let r = await fetch("/api/news");
         let j = await r.json();
 
@@ -208,20 +123,7 @@ def panel():
         document.getElementById("news").innerHTML = html;
     }
 
-    async function loadTrends(){
-        let r = await fetch("/api/trends");
-        let j = await r.json();
-
-        let html="";
-        j.trends.forEach(t=>{
-            html += "<p>"+t+"</p>";
-        });
-
-        document.getElementById("trends").innerHTML = html;
-    }
-
-    setInterval(loadNews,5000);
-    setInterval(loadTrends,7000);
+    setInterval(load,5000);
     </script>
     """)
 
