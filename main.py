@@ -1,43 +1,44 @@
-from flask import Flask, jsonify, request, render_template_string
-import requests
+from flask import Flask, jsonify, request, render_template_string, session, redirect
 import sqlite3
+import requests
+import difflib
 import smtplib
 
 app = Flask(__name__)
+app.secret_key = "secret123"
 
-# -----------------------------
-# VERİ
-# -----------------------------
-data = {
-    "news": []
-}
-
-# -----------------------------
-# DATABASE
-# -----------------------------
+# ---------------- DATABASE ----------------
 def init_db():
     conn = sqlite3.connect("db.sqlite")
     c = conn.cursor()
+
     c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT,
-            password TEXT
-        )
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        password TEXT
+    )
     """)
+
     conn.commit()
     conn.close()
 
 init_db()
 
-# -----------------------------
-# FAKE NEWS SCORE
-# -----------------------------
+# ---------------- DATA ----------------
+data = {
+    "news": []
+}
+
+# ---------------- FAKE SCORE (TR) ----------------
 def fake_score(text):
     score = 0
     text = text.lower()
 
-    keywords = ["şok", "son dakika", "inanılmaz", "öldü", "gizli", "ifşa"]
+    keywords = [
+        "şok", "son dakika", "inanılmaz", "öldü",
+        "ifşa", "gizli", "gizemli", "şok edici"
+    ]
 
     for k in keywords:
         if k in text:
@@ -51,44 +52,76 @@ def fake_score(text):
 
     return min(score, 100)
 
-# -----------------------------
-# ANA
-# -----------------------------
-@app.route("/")
-def home():
+# ---------------- BENZERLİK ----------------
+def similarity(a, b):
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+# ---------------- AUTH ----------------
+@app.route("/register", methods=["POST"])
+def register():
+    u = request.json["username"]
+    p = request.json["password"]
+
+    conn = sqlite3.connect("db.sqlite")
+    c = conn.cursor()
+    c.execute("INSERT INTO users (username, password) VALUES (?,?)", (u, p))
+    conn.commit()
+    conn.close()
+
     return {"ok": True}
 
-# -----------------------------
-# ANALİZ
-# -----------------------------
+@app.route("/login", methods=["POST"])
+def login():
+    u = request.json["username"]
+    p = request.json["password"]
+
+    conn = sqlite3.connect("db.sqlite")
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE username=? AND password=?", (u, p))
+    user = c.fetchone()
+    conn.close()
+
+    if user:
+        session["user"] = u
+        return {"ok": True}
+
+    return {"ok": False}
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/")
+
+# ---------------- ANALYZE ----------------
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
     text = request.json.get("text", "")
 
     score = fake_score(text)
 
-    if score > 60:
-        status = "danger"
-    elif score > 30:
-        status = "suspicious"
-    else:
-        status = "normal"
+    similar_news = []
+    for n in data["news"]:
+        if similarity(text, n["text"]) > 0.6:
+            similar_news.append(n)
 
     result = {
         "text": text,
         "risk": score,
-        "status": status
+        "similar": similar_news
     }
 
     data["news"].append(result)
+
+    # 🚨 Risk yüksekse mail gönder
+    if score > 70:
+        send_email("ALICI_MAIL")
+
     return result
 
-# -----------------------------
-# HABER ÇEKME
-# -----------------------------
+# ---------------- TÜRKÇE HABER ----------------
 @app.route("/api/news")
 def get_news():
-    url = "https://newsapi.org/v2/top-headlines?country=us&apiKey=YOUR_API_KEY"
+    url = "https://newsapi.org/v2/top-headlines?country=tr&apiKey=YOUR_API_KEY"
 
     try:
         res = requests.get(url).json()
@@ -108,69 +141,65 @@ def get_news():
     except:
         return {"news": []}
 
-# -----------------------------
-# KULLANICI KAYIT
-# -----------------------------
-@app.route("/api/register", methods=["POST"])
-def register():
-    u = request.json.get("username")
-    p = request.json.get("password")
+# ---------------- SOSYAL MEDYA (YASAL) ----------------
+@app.route("/api/social")
+def social():
+    # Google Trends (yasal veri)
+    url = "https://trends.google.com/trends/trendingsearches/daily/rss?geo=TR"
 
-    conn = sqlite3.connect("db.sqlite")
-    c = conn.cursor()
-    c.execute("INSERT INTO users (username, password) VALUES (?,?)", (u, p))
-    conn.commit()
-    conn.close()
+    try:
+        res = requests.get(url).text
+        items = res.split("<title>")[1:6]
 
-    return {"ok": True}
+        trends = []
+        for i in items:
+            trends.append(i.split("</title>")[0])
 
-# -----------------------------
-# EMAIL (opsiyonel)
-# -----------------------------
-@app.route("/api/email", methods=["POST"])
-def send_email():
+        return {"trends": trends}
+    except:
+        return {"trends": []}
+
+# ---------------- EMAIL ----------------
+def send_email(rumeyysauslu@gmail.com):
     try:
         sender = "tubitaktest0@gmail.com"
         password = "umdyxtmpeljhodhy"
-        receiver = request.json.get("rumeyysauslu@gmail.com")
 
-        message = "Subject: Risk Alert\n\nRisk seviyesi yükseldi!"
+        message = "Subject: Risk Uyarısı\n\nYüksek riskli haber tespit edildi!"
 
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
         server.login(sender, password)
-        server.sendmail(sender, receiver, message)
+        server.sendmail(sender, to, message)
         server.quit()
+    except:
+        pass
 
-        return {"sent": True}
-    except Exception as e:
-        return {"error": str(e)}
-
-# -----------------------------
-# PANEL (UI)
-# -----------------------------
+# ---------------- PANEL ----------------
 @app.route("/panel")
 def panel():
     return render_template_string("""
-    <!DOCTYPE html>
     <html>
     <head>
-        <title>Risk Panel</title>
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     </head>
-    <body>
 
-    <h1>Risk Panel</h1>
+    <body>
+    <h1>Türkçe Risk Panel</h1>
 
     <input id="newsInput" placeholder="Haber gir">
-    <button onclick="analyze()">Analiz Et</button>
+    <button onclick="analyze()">Analiz</button>
 
     <p id="result"></p>
+    <div id="similar"></div>
 
     <canvas id="chart"></canvas>
 
-    <h2>Canlı Haberler</h2>
+    <h2>Türkçe Haberler</h2>
     <div id="news"></div>
+
+    <h2>Trendler</h2>
+    <div id="trends"></div>
 
     <script>
     let chart;
@@ -185,8 +214,16 @@ def panel():
         });
 
         const json = await res.json();
+
         document.getElementById('result').innerHTML =
-            "Risk: " + json.risk + " (" + json.status + ")";
+            "Risk: " + json.risk;
+
+        let sim = "<h3>Benzer:</h3>";
+        json.similar.forEach(s => {
+            sim += "<p>" + s.text + "</p>";
+        });
+
+        document.getElementById('similar').innerHTML = sim;
 
         loadData();
     }
@@ -199,16 +236,16 @@ def panel():
             chart = new Chart(document.getElementById('chart'), {
                 type: 'line',
                 data: {
-                    labels: json.news.map((_, i) => i+1),
+                    labels: json.news.map((_, i)=>i+1),
                     datasets: [{
                         label: 'Risk',
-                        data: json.news.map(n => n.risk)
+                        data: json.news.map(n=>n.risk)
                     }]
                 }
             });
         } else {
-            chart.data.labels = json.news.map((_, i) => i+1);
-            chart.data.datasets[0].data = json.news.map(n => n.risk);
+            chart.data.labels = json.news.map((_, i)=>i+1);
+            chart.data.datasets[0].data = json.news.map(n=>n.risk);
             chart.update();
         }
     }
@@ -218,28 +255,44 @@ def panel():
         const json = await res.json();
 
         let html = "";
-        json.news.forEach(n => {
-            html += `<p>${n.title} → Risk: ${n.risk}</p>`;
+        json.news.forEach(n=>{
+            html += `<p>${n.title} → ${n.risk}</p>`;
         });
 
         document.getElementById('news').innerHTML = html;
     }
 
+    async function loadTrends() {
+        const res = await fetch('/api/social');
+        const json = await res.json();
+
+        let html = "";
+        json.trends.forEach(t=>{
+            html += "<p>"+t+"</p>";
+        });
+
+        document.getElementById('trends').innerHTML = html;
+    }
+
     setInterval(loadData, 3000);
     setInterval(loadNews, 5000);
+    setInterval(loadTrends, 7000);
     </script>
 
     </body>
     </html>
     """)
 
-# -----------------------------
-# DATA API
-# -----------------------------
+# ---------------- DATA ----------------
 @app.route("/api/data")
 def get_data():
     return jsonify(data)
 
-# -----------------------------
+# ---------------- HOME ----------------
+@app.route("/")
+def home():
+    return {"ok": True}
+
+# ---------------- RUN ----------------
 if __name__ == "__main__":
     app.run()
