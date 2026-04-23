@@ -2,63 +2,47 @@ from flask import Flask, request, jsonify, render_template_string
 import requests
 import difflib
 import xml.etree.ElementTree as ET
-import smtplib
-import os
-import hashlib
 
 app = Flask(__name__)
 
-# ---------------- EMAIL ----------------
-def send_email(subject, content):
-    try:
-        sender = os.getenv("tubitaktest0@gmail.com")
-        password = os.getenv("umdyxtmpeljhodhy")
-        receiver = os.getenv("rumeyysauslu@gmail.com")
-
-        if not sender or not password or not receiver:
-            print("EMAIL ENV eksik")
-            return
-
-        msg = f"Subject: {subject}\n\n{content}"
-
-        s = smtplib.SMTP("smtp.gmail.com", 587)
-        s.starttls()
-        s.login(sender, password)
-        s.sendmail(sender, receiver, msg)
-        s.quit()
-
-        print("MAIL GÖNDERİLDİ")
-
-    except Exception as e:
-        print("mail hata:", e)
-
-# ---------------- RSS ----------------
+# ---------------- RSS PARSER ----------------
 def parse_rss(url):
     try:
         r = requests.get(url, timeout=6)
         root = ET.fromstring(r.content)
 
         data = []
-        for item in root.findall(".//item")[:20]:
-            title = item.find("title").text
-            if title:
-                data.append(title)
+        for item in root.findall(".//item"):
+            title = item.find("title")
+            if title is not None and title.text:
+                data.append(title.text)
 
-        return data
+        return data[:30]
     except:
         return []
 
 # ---------------- KAYNAKLAR ----------------
 def get_news():
-    return (
-        parse_rss("https://teyit.org/feed") +
-        parse_rss("https://www.dogrulukpayi.com/rss.xml") +
-        parse_rss("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr")
-    )
+    sources = []
+
+    sources += parse_rss("https://teyit.org/feed")
+    sources += parse_rss("https://www.dogrulukpayi.com/rss.xml")
+    sources += parse_rss("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr")
+
+    # fallback (boş gelirse)
+    if len(sources) < 5:
+        sources += [
+            "SON DAKİKA ŞOK HABER HERKES PAYLAŞIYOR",
+            "İnanılmaz olay gizli gerçek ortaya çıktı",
+            "Herkes bunu konuşuyor büyük iddia",
+            "Acil paylaşılması gereken haber",
+        ]
+
+    return sources
 
 # ---------------- HABER Mİ ----------------
 def is_news_like(text):
-    keywords = ["haber","son dakika","iddia","paylaş","gündem"]
+    keywords = ["haber","son dakika","iddia","paylaş","gündem","açıklama"]
     return any(k in text.lower() for k in keywords)
 
 # ---------------- RISK ----------------
@@ -66,18 +50,19 @@ def calc_risk(text):
     if not is_news_like(text):
         return 0, ["Haber formatı değil"]
 
-    score = 0
+    score = 20  # taban
+
     reasons = []
     t = text.lower()
 
-    viral = ["şok","inanılmaz","öldü","ifşa","gizli","acil","hemen paylaş"]
+    viral = ["şok","inanılmaz","öldü","ifşa","gizli","acil"]
 
     for w in viral:
         if w in t:
-            score += 20
-            reasons.append("Sosyal medya abartı dili")
+            score += 15
+            reasons.append("Abartı / viral dil")
 
-    if "!" in text or text.isupper():
+    if "!" in text:
         score += 10
         reasons.append("Clickbait")
 
@@ -85,97 +70,67 @@ def calc_risk(text):
         score += 10
         reasons.append("Kısa içerik")
 
-    # kaynak benzerliği
-    for s in get_news():
-        ratio = difflib.SequenceMatcher(None, t, s.lower()).ratio()
-        if ratio > 0.5:
-            score += 20
-            reasons.append("Şüpheli içerik benzerliği")
-            break
-
     return min(score, 100), reasons
-
-# ---------------- MAIL SPAM ENGEL ----------------
-sent_cache = set()
-
-def send_if_high_risk(title, risk):
-    if risk < 80:
-        return
-
-    key = hashlib.md5(title.encode()).hexdigest()
-
-    if key in sent_cache:
-        return
-
-    send_email(
-        "🚨 Yüksek Riskli Haber",
-        f"Haber:\n{title}\n\nRisk: {risk}"
-    )
-
-    sent_cache.add(key)
 
 # ---------------- KAYNAK ANALİZ ----------------
 def analyze_news():
     news = get_news()
     result = []
 
-    for n in news[:25]:
+    for n in news:
         risk, reasons = calc_risk(n)
 
-        if risk >= 50:  # ✅ BURASI DEĞİŞTİ
+        if risk >= 50:
             result.append({
                 "title": n,
                 "risk": risk,
                 "reasons": reasons
             })
 
-            # 🔴 sadece 80+ mail
-            send_if_high_risk(n, risk)
-
-    return result
+    return result[:15]
 
 # ---------------- API ----------------
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
     text = request.json.get("text","")
     risk, reasons = calc_risk(text)
-
-    if risk >= 80:
-        send_email(
-            "🚨 Kullanıcı Yüksek Riskli İçerik",
-            f"Metin:\n{text}\n\nRisk: {risk}"
-        )
-
     return {"risk": risk, "reasons": reasons}
 
 @app.route("/api/news")
 def news():
     return {"data": analyze_news()}
 
-# ---------------- UI ----------------
+# ---------------- DASHBOARD UI ----------------
 @app.route("/")
 def home():
     return render_template_string("""
 <!DOCTYPE html>
 <html>
 <head>
-<title>Risk Panel</title>
+<title>Yalan Haber Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <style>
 body {background:#0f172a;color:white;font-family:Arial;padding:20px;}
-.card {background:#1e293b;padding:10px;margin:8px;border-radius:8px;}
+.card {background:#1e293b;padding:12px;margin:10px;border-radius:10px;}
 .high {border-left:5px solid red;}
 .medium {border-left:5px solid orange;}
-input {padding:8px;width:260px;}
-button {padding:8px;background:red;color:white;border:none;}
-canvas {max-width:220px;margin-top:10px;}
+.box {display:flex;gap:20px;}
+.stat {background:#111827;padding:15px;border-radius:8px;}
+canvas {max-width:200px;}
 </style>
 </head>
 
 <body>
 
-<h2>🚨 Yalan Haber Risk Paneli</h2>
+<h1>🚨 Yalan Haber Dashboard</h1>
+
+<div class="box">
+  <div class="stat">Toplam Haber: <span id="total">0</span></div>
+  <div class="stat">Yüksek Risk: <span id="high">0</span></div>
+</div>
+
+<br>
 
 <input id="txt" placeholder="Haber gir">
 <button onclick="analyze()">Analiz</button>
@@ -185,7 +140,7 @@ canvas {max-width:220px;margin-top:10px;}
 
 <canvas id="chart"></canvas>
 
-<h3>🔥 Riskli Kaynak Haberler (50+)</h3>
+<h2>🔥 Riskli Haberler</h2>
 <div id="news"></div>
 
 <script>
@@ -205,9 +160,7 @@ async function analyze(){
     document.getElementById("risk").innerText="Risk: "+j.risk;
 
     let html="";
-    j.reasons.forEach(x=>{
-        html+="<li>"+x+"</li>";
-    });
+    j.reasons.forEach(x=> html+="<li>"+x+"</li>");
     document.getElementById("reasons").innerHTML=html;
 
     draw(j.risk);
@@ -229,9 +182,15 @@ async function loadNews(){
     let r=await fetch("/api/news");
     let j=await r.json();
 
+    let total = j.data.length;
+    let high = j.data.filter(x=>x.risk>=80).length;
+
+    document.getElementById("total").innerText = total;
+    document.getElementById("high").innerText = high;
+
     let html="";
     j.data.forEach(n=>{
-        let cls = n.risk >= 80 ? "high" : "medium";
+        let cls = n.risk>=80 ? "high" : "medium";
 
         html+=`
         <div class="card ${cls}">
@@ -245,7 +204,7 @@ async function loadNews(){
     document.getElementById("news").innerHTML=html;
 }
 
-setInterval(loadNews,7000);
+setInterval(loadNews,5000);
 loadNews();
 
 </script>
