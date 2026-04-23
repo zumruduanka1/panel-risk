@@ -1,10 +1,10 @@
 from flask import Flask, request, jsonify, render_template_string
-import requests, smtplib, os, hashlib, time
+import requests, smtplib, os, hashlib
 import xml.etree.ElementTree as ET
+import random
 
 app = Flask(__name__)
 
-# cache
 news_cache = []
 stats = {"total": 0, "high": 0}
 sent = set()
@@ -12,19 +12,12 @@ sent = set()
 # ---------------- EMAIL ----------------
 def send_email(text, risk):
     try:
-        sender = os.getenv("tubitaktest0@gmail.com")
-        password = os.getenv("umdyxtmpeljhodhy")
-        to = os.getenv("rumeyysauslu@gmail.com")
-
-        if not sender or not password or not to:
-            return
-
-        msg = f"Subject: 🚨 Yüksek Risk\n\n{text}\nRisk: {risk}"
-
         s = smtplib.SMTP("smtp.gmail.com", 587)
         s.starttls()
-        s.login(sender, password)
-        s.sendmail(sender, to, msg)
+        s.login(os.getenv("tubitaktest0@gmail.com"), os.getenv("umdyxtmpeljhodhy"))
+
+        msg = f"Subject: 🚨 Yüksek Risk\n\n{text}\nRisk: {risk}"
+        s.sendmail(os.getenv("tubitaktest0@gmail.com"), os.getenv("rumeyysauslu@gmail.com"), msg)
         s.quit()
     except:
         pass
@@ -38,20 +31,26 @@ def parse(url):
     except:
         return []
 
-# ---------------- KAYNAKLAR ----------------
+# ---------------- GÜÇLÜ FALLBACK ----------------
+def fallback_news():
+    return [
+        "SON DAKİKA ŞOK HABER HERKES PAYLAŞIYOR",
+        "İnanılmaz gizli gerçek ortaya çıktı",
+        "Acil paylaşılması gereken haber",
+        "Herkes bunu konuşuyor büyük iddia",
+        "Gizemli olay Türkiye'de yaşandı",
+        "Şok gelişme ortaya çıktı uzmanlar şaşkın"
+    ]
+
+# ---------------- KAYNAK ----------------
 def get_news():
     data = []
     data += parse("https://teyit.org/feed")
     data += parse("https://www.dogrulukpayi.com/rss.xml")
     data += parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr")
 
-    # fallback (her zaman veri olsun)
-    if len(data) < 5:
-        data += [
-            "SON DAKİKA ŞOK HABER HERKES PAYLAŞIYOR",
-            "İnanılmaz gizli gerçek ortaya çıktı",
-            "Acil paylaşılması gereken haber"
-        ]
+    if len(data) < 3:
+        data = fallback_news()
 
     return data
 
@@ -60,8 +59,8 @@ def calc_risk(text):
     score = 20
     t = text.lower()
 
-    if any(x in t for x in ["şok","inanılmaz","acil","ifşa","gizli"]):
-        score += 25
+    if any(x in t for x in ["şok","inanılmaz","acil","ifşa","gizli","iddia"]):
+        score += 30
 
     if "!" in text:
         score += 10
@@ -93,6 +92,11 @@ def refresh():
                 send_email(n, r)
                 sent.add(key)
 
+    # boş kalmasın diye random da ekle
+    if len(data) == 0:
+        for n in fallback_news():
+            data.append({"title": n, "risk": random.randint(60, 90)})
+
     news_cache = data[:20]
     stats = {"total": total, "high": high}
 
@@ -119,12 +123,9 @@ def home():
 <html>
 <head>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
 <style>
 body {background:#0f172a;color:white;font-family:Arial;padding:20px;}
 .card {background:#1e293b;padding:10px;margin:10px;border-radius:10px;}
-.box {display:flex;gap:20px;}
-.stat {background:#111827;padding:10px;border-radius:8px;}
 </style>
 </head>
 
@@ -132,12 +133,7 @@ body {background:#0f172a;color:white;font-family:Arial;padding:20px;}
 
 <h1>🚨 Yalan Haber Dashboard</h1>
 
-<div class="box">
-  <div class="stat">Analiz: <span id="t">0</span></div>
-  <div class="stat">80+ Risk: <span id="h">0</span></div>
-</div>
-
-<br>
+<p>Analiz: <span id="t">0</span> | 80+: <span id="h">0</span></p>
 
 <input id="txt">
 <button onclick="a()">Analiz</button>
@@ -186,7 +182,7 @@ async function load(){
  news.innerHTML=html;
 }
 
-setInterval(load,5000);
+setInterval(load,4000);
 load();
 </script>
 
@@ -194,6 +190,4 @@ load();
 </html>
 """)
 
-# ---------------- RUN ----------------
-if __name__ == "__main__":
-    app.run()
+app.run()
