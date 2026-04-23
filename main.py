@@ -26,19 +26,14 @@ def init_db():
 init_db()
 
 # ---------------- DATA ----------------
-data = {
-    "news": []
-}
+data = {"news": []}
 
-# ---------------- FAKE SCORE (TR) ----------------
+# ---------------- FAKE SCORE ----------------
 def fake_score(text):
     score = 0
     text = text.lower()
 
-    keywords = [
-        "şok", "son dakika", "inanılmaz", "öldü",
-        "ifşa", "gizli", "gizemli", "şok edici"
-    ]
+    keywords = ["şok", "son dakika", "inanılmaz", "öldü", "ifşa", "gizli"]
 
     for k in keywords:
         if k in text:
@@ -52,7 +47,7 @@ def fake_score(text):
 
     return min(score, 100)
 
-# ---------------- BENZERLİK ----------------
+# ---------------- SIMILARITY ----------------
 def similarity(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio()
 
@@ -92,11 +87,26 @@ def logout():
     session.clear()
     return redirect("/")
 
+# ---------------- EMAIL ----------------
+def send_email(to):
+    try:
+        sender = "tubitaktest0@gmail.com"   # BURAYA kendi mailini yaz
+        password = "umdyxtmpeljhodhy"          # Gmail App Password
+
+        message = "Subject: Risk Uyarısı\n\nYüksek riskli haber tespit edildi!"
+
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(sender, password)
+        server.sendmail(sender, to, message)
+        server.quit()
+    except Exception as e:
+        print("Mail hata:", e)
+
 # ---------------- ANALYZE ----------------
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
     text = request.json.get("text", "")
-
     score = fake_score(text)
 
     similar_news = []
@@ -112,13 +122,13 @@ def analyze():
 
     data["news"].append(result)
 
-    # 🚨 Risk yüksekse mail gönder
+    # 🚨 yüksek riskte mail
     if score > 70:
-        send_email("rumeyysauslu@gmail.com")
+        send_email("rumeyysauslu@gmail.com")  # BURAYA alıcı mail
 
     return result
 
-# ---------------- TÜRKÇE HABER ----------------
+# ---------------- NEWS ----------------
 @app.route("/api/news")
 def get_news():
     url = "https://newsapi.org/v2/top-headlines?country=tr&apiKey=YOUR_API_KEY"
@@ -127,166 +137,94 @@ def get_news():
         res = requests.get(url).json()
         articles = res.get("articles", [])[:5]
 
-        results = []
+        result = []
         for a in articles:
             title = a.get("title", "")
-            score = fake_score(title)
-
-            results.append({
+            result.append({
                 "title": title,
-                "risk": score
+                "risk": fake_score(title)
             })
 
-        return {"news": results}
+        return {"news": result}
     except:
         return {"news": []}
 
-# ---------------- SOSYAL MEDYA (YASAL) ----------------
-@app.route("/api/social")
-def social():
-    # Google Trends (yasal veri)
+# ---------------- TRENDS ----------------
+@app.route("/api/trends")
+def trends():
     url = "https://trends.google.com/trends/trendingsearches/daily/rss?geo=TR"
 
     try:
         res = requests.get(url).text
         items = res.split("<title>")[1:6]
 
-        trends = []
+        data_list = []
         for i in items:
-            trends.append(i.split("</title>")[0])
+            data_list.append(i.split("</title>")[0])
 
-        return {"trends": trends}
+        return {"trends": data_list}
     except:
         return {"trends": []}
-
-# ---------------- EMAIL ----------------
-def send_email(to):
-    try:
-        sender = "tubitaktest0@gmail.com""  
-        password = "umdyxtmpeljhodhy"  
-
-        message = "Subject: Risk Uyarısı\n\nYüksek riskli haber tespit edildi!"
-
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(sender, password)
-        server.sendmail(sender, to, message)
-        server.quit()
-    except Exception as e:
-        print(f"Mail gönderme hatası: {e}")
 
 # ---------------- PANEL ----------------
 @app.route("/panel")
 def panel():
     return render_template_string("""
-    <html>
-    <head>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    </head>
+    <h1>Risk Panel</h1>
 
-    <body>
-    <h1>Türkçe Risk Panel</h1>
+    <input id="text">
+    <button onclick="send()">Analiz</button>
 
-    <input id="newsInput" placeholder="Haber gir">
-    <button onclick="analyze()">Analiz</button>
+    <p id="res"></p>
 
-    <p id="result"></p>
-    <div id="similar"></div>
-
-    <canvas id="chart"></canvas>
-
-    <h2>Türkçe Haberler</h2>
+    <h2>Haberler</h2>
     <div id="news"></div>
 
     <h2>Trendler</h2>
     <div id="trends"></div>
 
     <script>
-    let chart;
+    async function send(){
+        let t = document.getElementById("text").value;
 
-    async function analyze() {
-        const text = document.getElementById('newsInput').value;
-
-        const res = await fetch('/api/analyze', {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({text})
+        let r = await fetch("/api/analyze",{
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({text:t})
         });
 
-        const json = await res.json();
+        let j = await r.json();
+        document.getElementById("res").innerText = "Risk: " + j.risk;
+    }
 
-        document.getElementById('result').innerHTML =
-            "Risk: " + json.risk;
+    async function loadNews(){
+        let r = await fetch("/api/news");
+        let j = await r.json();
 
-        let sim = "<h3>Benzer:</h3>";
-        json.similar.forEach(s => {
-            sim += "<p>" + s.text + "</p>";
+        let html="";
+        j.news.forEach(n=>{
+            html += "<p>"+n.title+" ("+n.risk+")</p>";
         });
 
-        document.getElementById('similar').innerHTML = sim;
-
-        loadData();
+        document.getElementById("news").innerHTML = html;
     }
 
-    async function loadData() {
-        const res = await fetch('/api/data');
-        const json = await res.json();
+    async function loadTrends(){
+        let r = await fetch("/api/trends");
+        let j = await r.json();
 
-        if (!chart) {
-            chart = new Chart(document.getElementById('chart'), {
-                type: 'line',
-                data: {
-                    labels: json.news.map((_, i)=>i+1),
-                    datasets: [{
-                        label: 'Risk',
-                        data: json.news.map(n=>n.risk)
-                    }]
-                }
-            });
-        } else {
-            chart.data.labels = json.news.map((_, i)=>i+1);
-            chart.data.datasets[0].data = json.news.map(n=>n.risk);
-            chart.update();
-        }
-    }
-
-    async function loadNews() {
-        const res = await fetch('/api/news');
-        const json = await res.json();
-
-        let html = "";
-        json.news.forEach(n=>{
-            html += `<p>${n.title} → ${n.risk}</p>`;
-        });
-
-        document.getElementById('news').innerHTML = html;
-    }
-
-    async function loadTrends() {
-        const res = await fetch('/api/social');
-        const json = await res.json();
-
-        let html = "";
-        json.trends.forEach(t=>{
+        let html="";
+        j.trends.forEach(t=>{
             html += "<p>"+t+"</p>";
         });
 
-        document.getElementById('trends').innerHTML = html;
+        document.getElementById("trends").innerHTML = html;
     }
 
-    setInterval(loadData, 3000);
-    setInterval(loadNews, 5000);
-    setInterval(loadTrends, 7000);
+    setInterval(loadNews,5000);
+    setInterval(loadTrends,7000);
     </script>
-
-    </body>
-    </html>
     """)
-
-# ---------------- DATA ----------------
-@app.route("/api/data")
-def get_data():
-    return jsonify(data)
 
 # ---------------- HOME ----------------
 @app.route("/")
@@ -295,4 +233,4 @@ def home():
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run()
