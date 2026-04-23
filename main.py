@@ -31,10 +31,10 @@ def fake_score(text):
     return min(score, 100)
 
 # ---------------- EMAIL ----------------
-def send_email(rumeyysauslu@gmail.com):
+def send_email(to):
     try:
-        sender = "tubitaktest0@gmail.com"          # kendi gmailin
-        password = "umdyxtmpeljhodhy"       # gmail app password
+        sender = "tubitaktest0@gmail.com"
+        password = "umdyxtmpeljhodhy"
 
         message = "Subject: Risk Uyarısı\n\nYüksek riskli içerik tespit edildi!"
 
@@ -57,7 +57,7 @@ def analyze():
     data["news"].append(result)
 
     if score > 70:
-        send_email("ALICI_MAIL")  # mail buraya
+        send_email("rumeyysauslu@gmail.com")  # mail buraya
 
     return result
 
