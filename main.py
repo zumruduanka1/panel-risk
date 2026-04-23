@@ -7,12 +7,16 @@ app = Flask(__name__)
 
 data = {"news": []}
 
-# ---------------- FAKE SCORE ----------------
+# ---------------- RISK SCORE ----------------
 def fake_score(text):
     score = 0
     text = text.lower()
 
-    keywords = ["şok", "son dakika", "inanılmaz", "öldü", "ifşa", "gizli"]
+    keywords = [
+        "şok", "son dakika", "inanılmaz", "öldü",
+        "ifşa", "gizli", "gizemli", "şok edici",
+        "kanıtlandı", "herkes bunu konuşuyor"
+    ]
 
     for k in keywords:
         if k in text:
@@ -21,25 +25,25 @@ def fake_score(text):
     if text.isupper():
         score += 20
 
+    if len(text) < 25:
+        score += 10
+
     return min(score, 100)
 
-# ---------------- SIMILARITY ----------------
-def similarity(a, b):
-    return difflib.SequenceMatcher(None, a, b).ratio()
-
 # ---------------- EMAIL ----------------
-def send_email(to):
+def send_email(rumeyysauslu@gmail.com):
     try:
-        sender = "tubitaktest0@gmail.com"   # kendi mailin
-        password = "umdyxtmpeljhodhy"          # gmail app password
+        sender = "tubitaktest0@gmail.com"          # kendi gmailin
+        password = "umdyxtmpeljhodhy"       # gmail app password
 
-        message = "Subject: Risk Uyarısı\n\nYüksek riskli haber bulundu!"
+        message = "Subject: Risk Uyarısı\n\nYüksek riskli içerik tespit edildi!"
 
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
         server.login(sender, password)
         server.sendmail(sender, to, message)
         server.quit()
+
     except Exception as e:
         print("mail hata:", e)
 
@@ -49,20 +53,15 @@ def analyze():
     text = request.json.get("text", "")
     score = fake_score(text)
 
-    result = {
-        "text": text,
-        "risk": score
-    }
-
+    result = {"text": text, "risk": score}
     data["news"].append(result)
 
-    # yüksek riskte mail
     if score > 70:
-        send_email("rumeyysauslu@gmail.com")
+        send_email("ALICI_MAIL")  # mail buraya
 
     return result
 
-# ---------------- NEWS ----------------
+# ---------------- NEWS (TR) ----------------
 @app.route("/api/news")
 def news():
     url = "https://newsapi.org/v2/top-headlines?country=tr&apiKey=YOUR_API_KEY"
@@ -83,22 +82,42 @@ def news():
     except:
         return {"news": []}
 
+# ---------------- GOOGLE TRENDS ----------------
+@app.route("/api/trends")
+def trends():
+    url = "https://trends.google.com/trends/trendingsearches/daily/rss?geo=TR"
+
+    try:
+        res = requests.get(url).text
+        items = res.split("<title>")[1:10]
+
+        trend_list = []
+        for i in items:
+            trend_list.append(i.split("</title>")[0])
+
+        return {"trends": trend_list}
+    except:
+        return {"trends": []}
+
 # ---------------- PANEL ----------------
 @app.route("/panel")
 def panel():
     return render_template_string("""
-    <h1>Risk Panel</h1>
+    <h1>Sosyal Medya Risk Paneli</h1>
 
-    <input id="txt">
-    <button onclick="gonder()">Analiz</button>
+    <input id="txt" placeholder="Haber gir">
+    <button onclick="analyze()">Analiz</button>
 
     <p id="res"></p>
 
-    <h2>Haberler</h2>
+    <h2>Türkçe Haberler</h2>
     <div id="news"></div>
 
+    <h2>Trendler</h2>
+    <div id="trends"></div>
+
     <script>
-    async function gonder(){
+    async function analyze(){
         let t = document.getElementById("txt").value;
 
         let r = await fetch("/api/analyze",{
@@ -111,19 +130,32 @@ def panel():
         document.getElementById("res").innerText = "Risk: " + j.risk;
     }
 
-    async function load(){
+    async function loadNews(){
         let r = await fetch("/api/news");
         let j = await r.json();
 
         let html="";
         j.news.forEach(n=>{
-            html += "<p>"+n.title+" ("+n.risk+")</p>";
+            html += "<p>"+n.title+" → "+n.risk+"</p>";
         });
 
         document.getElementById("news").innerHTML = html;
     }
 
-    setInterval(load,5000);
+    async function loadTrends(){
+        let r = await fetch("/api/trends");
+        let j = await r.json();
+
+        let html="";
+        j.trends.forEach(t=>{
+            html += "<p>"+t+"</p>";
+        });
+
+        document.getElementById("trends").innerHTML = html;
+    }
+
+    setInterval(loadNews, 5000);
+    setInterval(loadTrends, 7000);
     </script>
     """)
 
