@@ -5,9 +5,14 @@ import xml.etree.ElementTree as ET
 app = Flask(__name__)
 
 cache = []
-stats = {"total":0,"risk":0,"safe":0}
 sent = set()
 last = 0
+
+stats = {
+    "total": 0,
+    "risk": 0,
+    "avg": 0
+}
 
 # ---------------- EMAIL ----------------
 def send_email(text, risk):
@@ -23,153 +28,179 @@ def send_email(text, risk):
         s.starttls()
         s.login(user, pw)
 
-        msg = f"Subject: 🚨 Yüksek Risk\n\n{text}\nRisk: {risk}%"
+        msg = f"Subject: 🚨 Yüksek Riskli Haber\n\n{text}\nRisk: {risk}%"
         s.sendmail(user, to, msg)
         s.quit()
     except:
         pass
 
-# ---------------- NEWS CHECK ----------------
+# ---------------- HABER KONTROL ----------------
 def is_news(text):
-    if not text or len(text)<20:
+    if not text or len(text) < 20:
         return False
 
-    keys=["iddia","son dakika","açıklandı","haber","video","görüntü"]
-    return any(k in text.lower() for k in keys) or len(text.split())>6
+    keys = ["iddia","son dakika","açıklandı","haber","video","görüntü"]
+    return any(k in text.lower() for k in keys) or len(text.split()) > 6
 
-# ---------------- AI ----------------
+# ---------------- RISK ----------------
 def explain(text):
-    t=text.lower()
-    r=[]
+    t = text.lower()
+    r = []
 
-    if "şok" in t: r.append("clickbait")
+    if "şok" in t: r.append("abartılı dil")
     if "gizli" in t: r.append("manipülasyon")
     if "herkes" in t: r.append("viral yayılım")
-    if "iddia" in t: r.append("doğrulanmamış")
+    if "iddia" in t: r.append("doğrulanmamış bilgi")
 
     return r
 
 def risk(text):
-    t=text.lower()
-    s=20
+    t = text.lower()
+    s = 25
 
     for k in ["şok","ifşa","gizli","kanıtlandı"]:
-        if k in t: s+=20
+        if k in t: s += 20
 
     for k in ["iddia","viral","herkes","paylaşılıyor"]:
-        if k in t: s+=10
+        if k in t: s += 10
 
-    if "!" in text: s+=10
-    if len(text)<30: s+=10
+    if "!" in text: s += 10
+    if len(text) < 30: s += 10
 
-    return min(100,s)
+    return min(100, s)
 
 # ---------------- RSS ----------------
 def parse(url, source):
-    data=[]
+    data = []
     try:
-        r=requests.get(url,timeout=5)
-        root=ET.fromstring(r.content)
+        r = requests.get(url, timeout=5)
+        root = ET.fromstring(r.content)
 
-        for i in root.findall(".//item")[:10]:
-            data.append((i.find("title").text,source,i.find("link").text))
+        for i in root.findall(".//item")[:15]:
+            title = i.find("title").text
+            link = i.find("link").text
+            data.append((title, source, link))
     except:
         pass
     return data
 
-# ---------------- SOCIAL ----------------
-def social():
-    konular=["deprem","aşı","seçim","ekonomi","savaş","teknoloji"]
-    duygular=["şok","gizli","ifşa","inanılmaz","korkutan"]
+# ---------------- SOSYAL (REAL FEEL) ----------------
+def social_real():
+    konular = ["deprem","aşı","seçim","ekonomi","savaş","teknoloji","sağlık"]
+    duygular = ["şok","gizli","ifşa","inanılmaz","korkutan"]
 
-    templates=[
+    templates = [
         "SON DAKİKA: {k} hakkında {d} iddia!",
         "{k} ile ilgili {d} görüntüler ortaya çıktı",
         "{k} sosyal medyada viral oldu",
         "{k} hakkında herkes bunu konuşuyor",
         "Uzmanlar uyardı: {k} tehlikeli olabilir",
+        "{k} hakkında paylaşım rekor kırdı",
+        "{k} ile ilgili gizli bilgiler sızdı"
     ]
 
-    return [(random.choice(templates).format(k=random.choice(konular),d=random.choice(duygular)),"Sosyal","#") for _ in range(40)]
+    data = []
+
+    for _ in range(60):
+        text = random.choice(templates).format(
+            k=random.choice(konular),
+            d=random.choice(duygular)
+        )
+
+        data.append((text, "Sosyal Medya", "#"))
+
+    return data
+
+# ---------------- GOOGLE NEWS (DAHA GERÇEK) ----------------
+def google_news():
+    return parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr", "Google News")
 
 # ---------------- COLLECT ----------------
 def collect():
-    data=[]
-    data+=parse("https://teyit.org/feed","Teyit")
-    data+=parse("https://www.dogrulukpayi.com/rss.xml","Doğruluk")
-    data+=parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr","Google News")
-    data+=social()
+    data = []
 
-    seen=set()
-    unique=[]
+    data += parse("https://teyit.org/feed","Teyit")
+    data += parse("https://www.dogrulukpayi.com/rss.xml","Doğruluk")
+    data += google_news()
+    data += social_real()
+
+    # duplicate temizleme
+    seen = set()
+    unique = []
 
     for d in data:
-        if d[0] not in seen:
-            seen.add(d[0])
+        key = d[0].lower().strip()
+        if key not in seen:
+            seen.add(key)
             unique.append(d)
 
+    random.shuffle(unique)
     return unique
 
 # ---------------- REFRESH ----------------
 def refresh():
-    global cache, stats, last
+    global cache, last, stats
 
-    if time.time()-last<5:
+    if time.time() - last < 4:
         return
 
-    last=time.time()
-    raw=collect()
+    last = time.time()
 
-    out=[]
-    total=0
-    risk_c=0
-    safe=0
+    raw = collect()
 
-    for text,source,link in raw:
-        r=risk(text)
-        total+=1
+    out = []
+    total = 0
+    risk_c = 0
+    avg = 0
 
-        if r>=50:
+    for text, source, link in raw:
+        r = risk(text)
+        total += 1
+        avg += r
+
+        if r >= 50:
             out.append({
-                "text":text,
-                "risk":r,
-                "source":source,
-                "link":link,
-                "reasons":explain(text)
+                "text": text,
+                "risk": r,
+                "source": source,
+                "link": link,
+                "reasons": explain(text)
             })
-            risk_c+=1
-        else:
-            safe+=1
+            risk_c += 1
 
-        if r>=80:
-            h=hashlib.md5(text.encode()).hexdigest()
+        if r >= 80:
+            h = hashlib.md5(text.encode()).hexdigest()
             if h not in sent:
-                send_email(text,r)
+                send_email(text, r)
                 sent.add(h)
 
-    cache=out[:40]
-    stats={"total":total,"risk":risk_c,"safe":safe}
+    cache = out[:50]
+
+    stats = {
+        "total": total,
+        "risk": risk_c,
+        "avg": int(avg / total) if total else 0
+    }
 
 # ---------------- API ----------------
 @app.route("/api/news")
 def news():
     refresh()
-    return {"data":cache,"stats":stats}
+    return {"data": cache, "stats": stats}
 
-@app.route("/api/analyze",methods=["POST"])
+@app.route("/api/analyze", methods=["POST"])
 def analyze():
-    text=request.json.get("text")
+    text = request.json.get("text")
 
     if not is_news(text):
-        return {"error":"Sadece haber içerikleri analiz edilir!"}
+        return {"error": "Sadece haber içerikleri analiz edilir!"}
 
-    r=risk(text)
-    reasons=explain(text)
+    r = risk(text)
 
-    if r>=80:
-        send_email(text,r)
+    if r >= 80:
+        send_email(text, r)
 
-    return {"risk":r,"reasons":reasons}
+    return {"risk": r, "reasons": explain(text)}
 
 # ---------------- UI ----------------
 @app.route("/")
@@ -190,7 +221,7 @@ body{background:#020617;color:white;font-family:Arial;padding:20px;}
 
 <div class="container">
 
-<h1>AI Fake News Dashboard</h1>
+<h1>ULTRA REAL Fake News Dashboard</h1>
 
 <div class="card">
 <input id="txt" placeholder="Haber gir">
@@ -205,7 +236,7 @@ body{background:#020617;color:white;font-family:Arial;padding:20px;}
 </div>
 
 <div class="card">
-<h3>En Riskli Haberler</h3>
+<h3>Akış</h3>
 <div id="news"></div>
 </div>
 
@@ -250,7 +281,7 @@ async function load(){
  let r=await fetch("/api/news");
  let j=await r.json();
 
- stats.innerHTML="Toplam: "+j.stats.total+" | Riskli: "+j.stats.risk;
+ stats.innerHTML="Toplam: "+j.stats.total+" | Riskli: "+j.stats.risk+" | Ortalama Risk: "+j.stats.avg;
 
  let html="";
  j.data.forEach(n=>{
@@ -276,5 +307,5 @@ load();
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
-    port=int(os.environ.get("PORT",10000))
-    app.run(host="0.0.0.0",port=port)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
