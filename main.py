@@ -29,109 +29,105 @@ def send_email(text, risk):
     except:
         pass
 
+# ---------------- HABER KONTROL ----------------
+def is_news_like(text):
+    if not text or len(text.strip()) < 15:
+        return False
+
+    keywords = ["iddia","son dakika","açıklandı","oldu","paylaşıldı"]
+
+    if any(k in text.lower() for k in keywords):
+        return True
+
+    if len(text.split()) > 5:
+        return True
+
+    return False
+
 # ---------------- RSS ----------------
 def parse(url, source):
     data = []
     try:
         r = requests.get(url, timeout=5)
         root = ET.fromstring(r.content)
+
         for i in root.findall(".//item")[:10]:
             title = i.find("title").text
-            data.append((title, source))
+            link = i.find("link").text
+            data.append((title, source, link))
     except:
         pass
     return data
 
 # ---------------- SOSYAL VERİ ----------------
 def social_data():
+    konular = ["deprem","aşı","seçim","ekonomi","savaş","teknoloji"]
+    duygular = ["şok","gizli","ifşa","inanılmaz","korkutan"]
+
     templates = [
-        "SON DAKİKA: {konu} hakkında şok iddia!",
-        "{konu} ile ilgili gizli görüntüler ortaya çıktı",
-        "Uzmanlar uyardı: {konu} büyük tehlike olabilir",
+        "SON DAKİKA: {konu} hakkında {duygu} iddia!",
+        "{konu} ile ilgili {duygu} görüntüler ortaya çıktı",
         "{konu} sosyal medyada viral oldu",
-        "{konu} hakkında kimsenin bilmediği gerçek",
-        "İnanılmaz olay: {konu} gündemi sarstı",
-        "{konu} ile ilgili tartışma büyüyor",
+        "Uzmanlar uyardı: {konu} tehlikeli olabilir",
     ]
 
-    konular = [
-        "deprem", "aşı", "seçim", "ünlü ölümü",
-        "ekonomi krizi", "savaş", "gizli proje",
-        "teknoloji skandalı"
+    return [(random.choice(templates).format(konu=random.choice(konular),duygu=random.choice(duygular)),"Sosyal Medya","#") for _ in range(40)]
+
+def human_style():
+    samples = [
+        "arkadaşlar bu doğru mu?",
+        "herkes paylaşıyor dikkat edin",
+        "çok garip ama gerçek gibi duruyor",
+        "bunu kimse konuşmuyor ama önemli"
     ]
-
-    return [(random.choice(templates).format(konu=random.choice(konular)), "Sosyal Medya") for _ in range(40)]
-
-def google_social():
-    queries = [
-        "site:x.com şok iddia",
-        "site:instagram.com viral olay",
-        "site:tiktok.com gizli video"
-    ]
-    return [(q, "Google Social") for q in queries]
-
-def trends():
-    data = []
-    try:
-        r = requests.get("https://trends.google.com/trends/trendingsearches/daily/rss?geo=TR").text
-        items = [i.split("</title>")[0] for i in r.split("<title>")[1:10]]
-        for i in items:
-            data.append((i, "Trend"))
-    except:
-        pass
-    return data
+    return [(random.choice(samples),"Kullanıcı","#") for _ in range(10)]
 
 def collect():
     data = []
-    data += parse("https://teyit.org/feed", "Teyit")
-    data += parse("https://www.dogrulukpayi.com/rss.xml", "Doğruluk Payı")
-    data += parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr", "Google News")
-    data += trends()
+    data += parse("https://teyit.org/feed","Teyit")
+    data += parse("https://www.dogrulukpayi.com/rss.xml","Doğruluk Payı")
+    data += parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr","Google News")
     data += social_data()
-    data += google_social()
+    data += human_style()
     return data
 
-# ---------------- RISK ENGINE ----------------
-def url_risk(text):
-    if "http" in text and any(x in text for x in [".xyz",".click",".info",".news"]):
-        return 30
-    return 0
-
-def media_risk(text):
-    return 15 if any(x in text.lower() for x in ["video","görüntü","fotoğraf","kanıt"]) else 0
-
-def viral_risk(text):
+# ---------------- RISK ----------------
+def explain(text):
     t = text.lower()
-    risk = 0
-    if "herkes" in t: risk += 10
-    if text.count("!") >= 2: risk += 15
-    return risk
+    reasons = []
 
-def pattern_risk(text):
-    t = text.lower()
-    risk = 0
-    if "son dakika" in t: risk += 15
-    if "kanıtlandı" in t: risk += 20
-    if "paylaşın" in t: risk += 15
-    return risk
+    if "şok" in t: reasons.append("clickbait")
+    if "gizli" in t: reasons.append("manipülasyon")
+    if "video" in t: reasons.append("kanıtsız medya")
+    if "herkes" in t: reasons.append("viral yayılım")
+
+    return reasons
 
 def risk_score(text):
-    s = 30
-    keywords = ["şok","gizli","ifşa","iddia","inanılmaz"]
+    t = text.lower()
+    s = 20
 
-    for k in keywords:
-        if k in text.lower():
-            s += 15
+    strong = ["şok","ifşa","gizli","kanıtlandı"]
+    medium = ["iddia","viral","herkes","paylaşıyor"]
 
-    if len(text) < 40:
+    for k in strong:
+        if k in t:
+            s += 20
+
+    for k in medium:
+        if k in t:
+            s += 10
+
+    if "!" in text:
         s += 10
 
-    s += url_risk(text)
-    s += media_risk(text)
-    s += viral_risk(text)
-    s += pattern_risk(text)
+    if len(text) < 30:
+        s += 10
 
-    return min(s, 100)
+    if len(text) > 120:
+        s -= 10
+
+    return max(0, min(s, 100))
 
 # ---------------- REFRESH ----------------
 def refresh():
@@ -148,12 +144,18 @@ def refresh():
     risk_count = 0
     safe = 0
 
-    for text, source in raw:
+    for item in raw:
+        text, source, link = item
         r = risk_score(text)
         total += 1
 
         if r >= 50:
-            out.append({"text": text, "risk": r, "source": source})
+            out.append({
+                "text": text,
+                "risk": r,
+                "source": source,
+                "link": link
+            })
             risk_count += 1
         else:
             safe += 1
@@ -176,12 +178,17 @@ def news():
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
     text = request.json.get("text")
+
+    if not is_news_like(text):
+        return {"error": "Bu bir haber metni gibi görünmüyor!"}
+
     r = risk_score(text)
+    reasons = explain(text)
 
     if r >= 80:
         send_email(text, r)
 
-    return {"risk": r}
+    return {"risk": r, "reasons": reasons}
 
 # ---------------- UI ----------------
 @app.route("/")
@@ -189,33 +196,16 @@ def home():
     return render_template_string("""
 <html>
 <head>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 body{background:#020617;color:white;font-family:Arial;padding:20px;}
 .container{max-width:1000px;margin:auto;}
-.title{text-align:center;font-size:40px;font-weight:bold;}
-.subtitle{text-align:center;color:#94a3b8;margin-bottom:30px;}
-
-.stats{display:flex;justify-content:center;gap:20px;margin-bottom:20px;}
-.box{background:#0f172a;padding:20px;border-radius:12px;width:150px;text-align:center;}
-
-.card{
- background:#0f172a;
- padding:20px;
- border-radius:16px;
- margin-top:20px;
- box-shadow:0 0 20px rgba(0,0,0,0.4);
- transition:0.2s;
-}
-.card:hover{transform:scale(1.02);}
-
+.title{text-align:center;font-size:40px;}
+.card{background:#0f172a;padding:20px;border-radius:12px;margin-top:20px;}
 input{width:100%;padding:10px;border-radius:10px;border:none;}
-button{margin-top:10px;padding:10px;width:100%;background:#2563eb;border:none;border-radius:10px;color:white;}
-
-.high{color:#ef4444;}
-.mid{color:#facc15;}
-.low{color:#22c55e;}
-
-small{color:#94a3b8;}
+button{margin-top:10px;padding:10px;width:100%;background:#2563eb;border:none;color:white;border-radius:10px;}
+.high{color:red;} .mid{color:orange;} .low{color:green;}
+a{color:white;text-decoration:none;}
 </style>
 </head>
 
@@ -223,30 +213,25 @@ small{color:#94a3b8;}
 
 <div class="container">
 
-<div class="title">Dezenformasyona Karşı Yapay Zeka</div>
-<div class="subtitle">Sosyal medya içeriklerini analiz eder</div>
-
-<div class="stats">
-<div class="box">Toplam<br><b id="t">0</b></div>
-<div class="box">Riskli<br><b id="r">0</b></div>
-<div class="box">Güvenli<br><b id="s">0</b></div>
-</div>
+<div class="title">AI Fake News Detector</div>
 
 <div class="card">
-<h3>Metin Analizi</h3>
 <input id="txt" placeholder="Metin gir">
 <button onclick="analyze()">Analiz</button>
 <h3 id="res"></h3>
+<canvas id="chart"></canvas>
 </div>
 
 <div class="card">
-<h3>Yüksek Riskli İçerikler</h3>
+<h3>Riskli İçerikler</h3>
 <div id="news"></div>
 </div>
 
 </div>
 
 <script>
+let chart;
+
 function color(r){
  if(r>=80) return "high";
  if(r>=50) return "mid";
@@ -263,31 +248,43 @@ async function analyze(){
  });
 
  let j=await r.json();
- res.innerHTML="Risk: <span class='"+color(j.risk)+"'>"+j.risk+"%</span>";
+
+ if(j.error){
+  res.innerHTML="<span style='color:red'>"+j.error+"</span>";
+  return;
+ }
+
+ res.innerHTML=j.risk+"% ("+j.reasons.join(", ")+")";
+
+ if(chart) chart.destroy();
+
+ chart=new Chart(document.getElementById("chart"),{
+  type:"doughnut",
+  data:{
+    labels:["Risk","Safe"],
+    datasets:[{data:[j.risk,100-j.risk]}]
+  }
+ });
 }
 
 async function load(){
  let r=await fetch("/api/news");
  let j=await r.json();
 
- t.innerText=j.stats.total;
- r.innerText=j.stats.risk;
- s.innerText=j.stats.safe;
-
  let html="";
  j.data.forEach(n=>{
   html+=`
   <div class="card">
-    ${n.text}<br>
-    <span class="${color(n.risk)}">${n.risk}%</span><br>
-    <small>${n.source}</small>
+  <a href="${n.link}" target="_blank">${n.text}</a><br>
+  <span class="${color(n.risk)}">${n.risk}%</span><br>
+  <small>${n.source}</small>
   </div>`;
  });
 
  news.innerHTML=html;
 }
 
-setInterval(load,4000);
+setInterval(load,3000);
 load();
 </script>
 
