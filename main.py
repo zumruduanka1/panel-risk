@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, render_template_string
-import random, time, os
+import os
 
 app = Flask(__name__)
 
@@ -8,7 +8,13 @@ def is_news(text):
     if not text or len(text) < 40:
         return False
 
-    keywords = ["son dakika","iddia","haber","gündem","açıklandı","rapor","uzman"]
+    keywords = [
+        "son dakika","iddia","haber","gündem",
+        "açıklandı","rapor","uzman","olay"
+    ]
+
+    if len(text.split()) < 6:
+        return False
 
     return any(k in text.lower() for k in keywords)
 
@@ -30,34 +36,45 @@ def analyze_news(text):
         score += 15
 
     # kesinlik
-    if "kanıtlandı" in t:
+    if "kanıtlandı" in t or "kesin" in t:
         score += 25
 
     # güven düşür
     if any(k in t for k in ["uzman","rapor","resmi"]):
         score -= 20
 
-    score = max(5, min(100, score))
+    # uzunluk
+    if len(text) < 50:
+        score += 15
+    elif len(text) > 120:
+        score -= 10
 
-    return score
+    # ünlem
+    score += text.count("!") * 5
+
+    return max(5, min(100, score))
 
 # ---------------- API ----------------
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
-    data = request.get_json()
+    try:
+        data = request.get_json(force=True)
 
-    if not data or "text" not in data:
-        return jsonify({"error": "veri yok"})
+        if not data or "text" not in data:
+            return jsonify({"error": "Veri yok"}), 400
 
-    text = data["text"]
+        text = str(data["text"])
+
+    except:
+        return jsonify({"error": "JSON hatası"}), 400
 
     if not is_news(text):
-        return jsonify({"error": "Bu bir haber metni değil!"})
+        return jsonify({"error": "Lütfen haber formatında bir içerik girin!"}), 400
 
-    r = analyze_news(text)
+    risk = analyze_news(text)
 
     return jsonify({
-        "risk": r,
+        "risk": int(risk),
         "status": "ok"
     })
 
@@ -65,39 +82,65 @@ def analyze():
 @app.route("/")
 def home():
     return render_template_string("""
-    <html>
-    <body style="background:black;color:white;font-family:Arial">
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Fake News Analyzer</title>
 
-    <h1>Fake News Analyzer</h1>
+<style>
+body {
+    background:#020617;
+    color:white;
+    font-family:Arial;
+    text-align:center;
+    padding:50px;
+}
+input {
+    width:300px;
+    padding:10px;
+}
+button {
+    padding:10px;
+}
+</style>
 
-    <input id="txt" style="width:300px">
-    <button onclick="go()">Analiz</button>
+</head>
 
-    <h2 id="res"></h2>
+<body>
 
-    <script>
-    async function go(){
-        let text = document.getElementById("txt").value;
+<h1>Fake News Analyzer</h1>
 
-        let r = await fetch("/api/analyze", {
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({text:text})
-        });
+<input id="txt" placeholder="Haber gir">
+<button onclick="go()">Analiz</button>
 
-        let j = await r.json();
+<h2 id="res"></h2>
 
-        if(j.error){
-            document.getElementById("res").innerHTML = "❌ " + j.error;
-        }else{
-            document.getElementById("res").innerHTML = "Risk: " + j.risk + "%";
-        }
+<script>
+async function go(){
+    let text = document.getElementById("txt").value;
+
+    let r = await fetch("/api/analyze", {
+        method:"POST",
+        headers:{
+            "Content-Type":"application/json; charset=UTF-8"
+        },
+        body:JSON.stringify({text:text})
+    });
+
+    let j = await r.json();
+
+    if(j.error){
+        document.getElementById("res").innerText = "❌ " + j.error;
+    }else{
+        document.getElementById("res").innerText = "Risk: " + j.risk + "%";
     }
-    </script>
+}
+</script>
 
-    </body>
-    </html>
-    """)
+</body>
+</html>
+""")
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
