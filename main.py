@@ -8,11 +8,7 @@ cache = []
 sent = set()
 last = 0
 
-stats = {
-    "total": 0,
-    "risk": 0,
-    "avg": 0
-}
+stats = {"total":0,"risk":0,"avg":0}
 
 # ---------------- EMAIL ----------------
 def send_email(text, risk):
@@ -34,13 +30,19 @@ def send_email(text, risk):
     except:
         pass
 
-# ---------------- HABER KONTROL ----------------
+# ---------------- HABER KONTROL (GÜÇLÜ) ----------------
 def is_news(text):
-    if not text or len(text) < 20:
+    if not text or len(text) < 30:
         return False
 
-    keys = ["iddia","son dakika","açıklandı","haber","video","görüntü"]
-    return any(k in text.lower() for k in keys) or len(text.split()) > 6
+    keywords = [
+        "son dakika","iddia","açıklandı","haber","görüntü",
+        "rapor","uzman","paylaşıldı","olay","gündem"
+    ]
+
+    score = sum(1 for k in keywords if k in text.lower())
+
+    return score >= 1 or len(text.split()) > 7
 
 # ---------------- RISK ----------------
 def explain(text):
@@ -49,25 +51,28 @@ def explain(text):
 
     if "şok" in t: r.append("abartılı dil")
     if "gizli" in t: r.append("manipülasyon")
-    if "herkes" in t: r.append("viral yayılım")
     if "iddia" in t: r.append("doğrulanmamış bilgi")
+    if "herkes" in t: r.append("viral yayılım")
+    if "kanıtlandı" in t: r.append("kesinlik iddiası")
 
     return r
 
 def risk(text):
     t = text.lower()
-    s = 25
+    s = 20
 
     for k in ["şok","ifşa","gizli","kanıtlandı"]:
         if k in t: s += 20
 
-    for k in ["iddia","viral","herkes","paylaşılıyor"]:
+    for k in ["iddia","viral","herkes"]:
         if k in t: s += 10
 
     if "!" in text: s += 10
-    if len(text) < 30: s += 10
+    if len(text) < 40: s += 10
+    if len(text) > 80: s += 5
+    if "uzman" in t: s -= 10
 
-    return min(100, s)
+    return max(0, min(100, s))
 
 # ---------------- RSS ----------------
 def parse(url, source):
@@ -77,43 +82,34 @@ def parse(url, source):
         root = ET.fromstring(r.content)
 
         for i in root.findall(".//item")[:15]:
-            title = i.find("title").text
-            link = i.find("link").text
-            data.append((title, source, link))
+            data.append((
+                i.find("title").text,
+                source,
+                i.find("link").text
+            ))
     except:
         pass
     return data
 
-# ---------------- SOSYAL (REAL FEEL) ----------------
+# ---------------- SOSYAL ----------------
 def social_real():
-    konular = ["deprem","aşı","seçim","ekonomi","savaş","teknoloji","sağlık"]
-    duygular = ["şok","gizli","ifşa","inanılmaz","korkutan"]
+    konular = ["deprem","aşı","seçim","ekonomi","savaş","teknoloji"]
+    duygular = ["şok","gizli","ifşa","inanılmaz"]
 
     templates = [
         "SON DAKİKA: {k} hakkında {d} iddia!",
         "{k} ile ilgili {d} görüntüler ortaya çıktı",
         "{k} sosyal medyada viral oldu",
-        "{k} hakkında herkes bunu konuşuyor",
-        "Uzmanlar uyardı: {k} tehlikeli olabilir",
-        "{k} hakkında paylaşım rekor kırdı",
-        "{k} ile ilgili gizli bilgiler sızdı"
+        "{k} hakkında herkes bunu konuşuyor"
     ]
 
-    data = []
-
-    for _ in range(60):
-        text = random.choice(templates).format(
+    return [
+        (random.choice(templates).format(
             k=random.choice(konular),
             d=random.choice(duygular)
-        )
-
-        data.append((text, "Sosyal Medya", "#"))
-
-    return data
-
-# ---------------- GOOGLE NEWS (DAHA GERÇEK) ----------------
-def google_news():
-    return parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr", "Google News")
+        ), "Sosyal Medya", "#")
+        for _ in range(30)
+    ]
 
 # ---------------- COLLECT ----------------
 def collect():
@@ -121,10 +117,11 @@ def collect():
 
     data += parse("https://teyit.org/feed","Teyit")
     data += parse("https://www.dogrulukpayi.com/rss.xml","Doğruluk")
-    data += google_news()
+    data += parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr","Google News")
+    data += parse("https://www.bbc.com/turkce/index.xml","BBC")
+    data += parse("https://www.ntv.com.tr/son-dakika.rss","NTV")
     data += social_real()
 
-    # duplicate temizleme
     seen = set()
     unique = []
 
@@ -141,11 +138,10 @@ def collect():
 def refresh():
     global cache, last, stats
 
-    if time.time() - last < 4:
+    if time.time() - last < 5:
         return
 
     last = time.time()
-
     raw = collect()
 
     out = []
@@ -193,7 +189,7 @@ def analyze():
     text = request.json.get("text")
 
     if not is_news(text):
-        return {"error": "Sadece haber içerikleri analiz edilir!"}
+        return {"error": "Lütfen haber formatında bir içerik girin!"}
 
     r = risk(text)
 
@@ -272,8 +268,8 @@ async function analyze(){
  if(chart) chart.destroy();
 
  chart=new Chart(document.getElementById("chart"),{
-  type:"doughnut",
-  data:{labels:["Risk","Safe"],datasets:[{data:[j.risk,100-j.risk]}]}
+  type:"bar",
+  data:{labels:["Risk"],datasets:[{data:[j.risk]}]}
  });
 }
 
@@ -281,7 +277,7 @@ async function load(){
  let r=await fetch("/api/news");
  let j=await r.json();
 
- stats.innerHTML="Toplam: "+j.stats.total+" | Riskli: "+j.stats.risk+" | Ortalama Risk: "+j.stats.avg;
+ stats.innerHTML="Toplam: "+j.stats.total+" | Riskli: "+j.stats.risk+" | Ortalama: "+j.stats.avg;
 
  let html="";
  j.data.forEach(n=>{
@@ -297,7 +293,7 @@ async function load(){
  news.innerHTML=html;
 }
 
-setInterval(load,4000);
+setInterval(load,5000);
 load();
 </script>
 
