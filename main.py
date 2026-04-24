@@ -1,12 +1,24 @@
-from flask import Flask, request, jsonify, render_template_string
-import requests, random, time, hashlib, os, smtplib
+from flask import Flask, request, jsonify, render_template_string, redirect, session
+import sqlite3, os, hashlib, requests, smtplib, time, random
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
 import xml.etree.ElementTree as ET
 
 app = Flask(__name__)
+app.secret_key = "secret123"
 
-cache = []
-sent = set()
-last = 0
+# ---------------- DB ----------------
+def init_db():
+    conn = sqlite3.connect("data.db")
+    c = conn.cursor()
+
+    c.execute("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT, password TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY, username TEXT, text TEXT, risk INTEGER)")
+
+    conn.commit()
+    conn.close()
+
+init_db()
 
 # ---------------- EMAIL ----------------
 def send_email(text, risk):
@@ -15,86 +27,101 @@ def send_email(text, risk):
         pw = os.getenv("umdyxtmpeljhodhy")
         to = os.getenv("rumeyysauslu@gmail.com")
 
-        if not user or not pw or not to:
+        if not user:
             return
 
         s = smtplib.SMTP("smtp.gmail.com", 587)
         s.starttls()
         s.login(user, pw)
 
-        msg = f"Subject: 🚨 Yüksek Riskli Haber\n\n{text}\nRisk: {risk}%"
+        msg = f"Subject: 🚨 Risk Alert\n\n{text}\nRisk: {risk}%"
         s.sendmail(user, to, msg)
         s.quit()
     except:
         pass
 
-# ---------------- HABER FİLTRESİ ----------------
-def is_news(text):
-    if not text:
-        return False
+# ---------------- AI ----------------
+def ai_score(text):
+    try:
+        headers = {"Authorization": f"Bearer {os.getenv('HF_API_KEY')}"}
 
-    t = text.lower().strip()
+        payload = {
+            "inputs": text,
+            "parameters": {
+                "candidate_labels": ["fake news","true news"]
+            }
+        }
 
-    if len(t) < 60:
-        return False
+        r = requests.post(
+            "https://api-inference.huggingface.co/models/facebook/bart-large-mnli",
+            headers=headers,
+            json=payload,
+            timeout=8
+        )
 
-    if len(t.split()) < 8:
-        return False
+        data = r.json()
 
-    if "." not in t and "," not in t:
-        return False
+        if isinstance(data, list):
+            scores = dict(zip(data[0]["labels"], data[0]["scores"]))
+            return int(scores.get("fake news", 0) * 100)
 
-    keywords = [
-        "son dakika","iddia","açıklandı","haber",
-        "gündem","rapor","uzman","olay","yetkili"
-    ]
+    except:
+        return None
 
-    score = sum(1 for k in keywords if k in t)
-
-    return score >= 1
-
-# ---------------- RISK MODEL ----------------
-def risk_score(text):
+# ---------------- BASE ----------------
+def base_score(text):
     t = text.lower()
-    score = 15
+    score = 30
 
     if "şok" in t or "ifşa" in t:
-        score += 25
-
-    if "iddia" in t:
         score += 20
-
-    if "kanıtlandı" in t or "kesin" in t:
-        score += 25
-
-    if "herkes" in t or "viral" in t:
+    if "iddia" in t:
         score += 15
-
-    if "uzman" in t or "rapor" in t or "resmi" in t:
-        score -= 30
-
-    length = len(t)
-
-    if length < 80:
-        score += 15
-    elif length > 150:
-        score -= 10
-
-    score += t.count("!") * 4
-
-    # 🔥 farklı sonuç üretir
-    score += random.randint(-12, 12)
+    if "kanıtlandı" in t:
+        score += 20
+    if "uzman" in t or "rapor" in t:
+        score -= 25
 
     return max(5, min(95, score))
 
+def risk_score(text):
+    ai = ai_score(text)
+    base = base_score(text)
+
+    if ai is not None:
+        return int(ai * 0.6 + base * 0.4)
+    return base
+
+# ---------------- FILTER ----------------
+def is_news(text):
+    t = text.lower()
+    return len(t) > 50 and any(k in t for k in ["haber","iddia","son dakika","gündem"])
+
+# ---------------- URL ----------------
+def extract_url(url):
+    try:
+        r = requests.get(url, timeout=5)
+        soup = BeautifulSoup(r.text, "html.parser")
+        return soup.title.string.strip()
+    except:
+        return None
+
+# ---------------- IMAGE ----------------
+def extract_img(url):
+    try:
+        name = urlparse(url).path.split("/")[-1]
+        return name.replace("-", " ").replace("_", " ")
+    except:
+        return None
+
 # ---------------- RSS ----------------
-def parse(url, source):
+def parse_rss(url, source):
     data = []
     try:
         r = requests.get(url, timeout=5)
         root = ET.fromstring(r.content)
 
-        for i in root.findall(".//item")[:10]:
+        for i in root.findall(".//item")[:8]:
             title = i.find("title").text
             link = i.find("link").text
             data.append((title, source, link))
@@ -102,78 +129,81 @@ def parse(url, source):
         pass
     return data
 
-# ---------------- SOSYAL ----------------
-def social_data():
-    konular = ["deprem","aşı","seçim","ekonomi","savaş","teknoloji"]
-    duygular = ["şok","gizli","ifşa","inanılmaz"]
+def social_feed():
+    topics = ["deprem","aşı","seçim","ekonomi","savaş"]
+    words = ["şok","ifşa","gizli"]
 
-    templates = [
-        "SON DAKİKA: {k} hakkında {d} iddia!",
-        "{k} ile ilgili {d} görüntüler ortaya çıktı",
-        "{k} sosyal medyada viral oldu",
-        "{k} hakkında herkes bunu konuşuyor"
-    ]
+    return [(f"{random.choice(topics)} hakkında {random.choice(words)} iddia","Sosyal Medya","#") for _ in range(10)]
 
-    return [
-        (random.choice(templates).format(
-            k=random.choice(konular),
-            d=random.choice(duygular)
-        ), "Sosyal Medya", "#")
-        for _ in range(20)
-    ]
+# ---------------- CACHE ----------------
+cache = []
+last = 0
 
-# ---------------- COLLECT ----------------
-def collect():
-    data = []
-
-    data += parse("https://teyit.org/feed","Teyit")
-    data += parse("https://www.dogrulukpayi.com/rss.xml","Doğruluk Payı")
-    data += parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr","Google News")
-    data += parse("https://www.ntv.com.tr/son-dakika.rss","NTV")
-    data += social_data()
-
-    seen = set()
-    unique = []
-
-    for d in data:
-        key = d[0].lower().strip()
-        if key not in seen:
-            seen.add(key)
-            unique.append(d)
-
-    random.shuffle(unique)
-    return unique
-
-# ---------------- REFRESH ----------------
 def refresh():
     global cache, last
 
-    if time.time() - last < 6:
+    if time.time() - last < 10:
         return
 
     last = time.time()
-    raw = collect()
+
+    data = []
+    data += parse_rss("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr","Google")
+    data += parse_rss("https://www.ntv.com.tr/son-dakika.rss","NTV")
+    data += parse_rss("https://www.bbc.com/turkce/index.xml","BBC")
+    data += parse_rss("https://teyit.org/feed","Teyit")
+    data += social_feed()
 
     out = []
 
-    for text, source, link in raw:
+    for text, source, link in data:
         r = risk_score(text)
-
         if r >= 50:
-            out.append({
-                "text": text,
-                "risk": r,
-                "source": source,
-                "link": link
-            })
+            out.append({"text":text,"risk":r,"source":source,"link":link})
 
         if r >= 80:
-            h = hashlib.md5(text.encode()).hexdigest()
-            if h not in sent:
-                send_email(text, r)
-                sent.add(h)
+            send_email(text, r)
 
-    cache = out[:40]
+    cache = out[:30]
+
+# ---------------- AUTH ----------------
+@app.route("/register", methods=["GET","POST"])
+def register():
+    if request.method == "POST":
+        u = request.form["u"]
+        p = hashlib.md5(request.form["p"].encode()).hexdigest()
+
+        conn = sqlite3.connect("data.db")
+        conn.execute("INSERT INTO users(username,password) VALUES(?,?)",(u,p))
+        conn.commit()
+        conn.close()
+
+        return redirect("/login")
+
+    return "<form method=post><input name=u><input name=p><button>Kayıt</button></form>"
+
+@app.route("/login", methods=["GET","POST"])
+def login():
+    if request.method == "POST":
+        u = request.form["u"]
+        p = hashlib.md5(request.form["p"].encode()).hexdigest()
+
+        conn = sqlite3.connect("data.db")
+        c = conn.cursor()
+        c.execute("SELECT * FROM users WHERE username=? AND password=?",(u,p))
+        user = c.fetchone()
+        conn.close()
+
+        if user:
+            session["user"] = u
+            return redirect("/")
+
+    return "<form method=post><input name=u><input name=p><button>Giriş</button></form>"
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
 
 # ---------------- API ----------------
 @app.route("/api/news")
@@ -183,100 +213,68 @@ def news():
 
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
-    data = request.get_json(force=True)
+    if "user" not in session:
+        return {"error":"login gerekli"}
 
-    if not data or "text" not in data:
-        return {"error":"Veri yok"}
+    text = request.json.get("text")
 
-    text = data["text"]
+    if text.startswith("http"):
+        if text.endswith((".jpg",".png",".jpeg",".webp")):
+            text = extract_img(text)
+        else:
+            text = extract_url(text)
 
-    if not is_news(text):
-        return {"error":"Bu bir haber metni değil!"}
+    if not text or not is_news(text):
+        return {"error":"Bu bir haber değil"}
 
     r = risk_score(text)
+
+    conn = sqlite3.connect("data.db")
+    conn.execute("INSERT INTO history(username,text,risk) VALUES(?,?,?)",(session["user"],text,r))
+    conn.commit()
+    conn.close()
 
     if r >= 80:
         send_email(text, r)
 
-    return {"risk": r}
+    return {"risk":r,"text":text}
 
 # ---------------- UI ----------------
 @app.route("/")
 def home():
-    return render_template_string("""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
-body{background:#020617;color:white;font-family:Arial;padding:20px;}
-.card{background:#0f172a;padding:15px;margin:10px;border-radius:10px;}
-.red{color:red;} .orange{color:orange;} .green{color:green;}
-</style>
-</head>
+    if "user" not in session:
+        return redirect("/login")
 
-<body>
+    conn = sqlite3.connect("data.db")
+    data = conn.execute("SELECT text,risk FROM history WHERE username=? ORDER BY id DESC LIMIT 10",(session["user"],)).fetchall()
+    conn.close()
 
-<h1>Fake News Risk Dashboard</h1>
+    items = "".join([f"<li>{t} - %{r}</li>" for t,r in data])
 
-<input id="txt" placeholder="Haber gir">
-<button onclick="go()">Analiz</button>
-<h2 id="res"></h2>
+    return f"""
+    <h1>Fake News Dashboard</h1>
+    <a href='/logout'>Çıkış</a><br><br>
 
-<h3>Riskli Haberler</h3>
-<div id="news"></div>
+    <input id='txt'>
+    <button onclick='go()'>Analiz</button>
+
+    <h2 id='res'></h2>
+
+    <h3>Geçmiş</h3>
+    <ul>{items}</ul>
 
 <script>
-function color(r){
- if(r>=80) return "red";
- if(r>=50) return "orange";
- return "green";
-}
-
-async function go(){
- let t=txt.value;
-
- let r=await fetch("/api/analyze",{
-  method:"POST",
-  headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({text:t})
- });
-
+async function go(){{
+ let t=document.getElementById("txt").value;
+ let r=await fetch("/api/analyze",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{text:t}})}});
  let j=await r.json();
-
- if(j.error){
-  res.innerText=j.error;
- }else{
-  res.innerText="Risk: "+j.risk+"%";
- }
-}
-
-async function load(){
- let r=await fetch("/api/news");
- let j=await r.json();
-
- let html="";
- j.data.forEach(n=>{
-  html+=`
-  <div class="card">
-  <a href="${n.link}" target="_blank">${n.text}</a><br>
-  <span class="${color(n.risk)}">${n.risk}%</span>
-  <br><small>${n.source}</small>
-  </div>`;
- });
-
- news.innerHTML=html;
-}
-
-setInterval(load,5000);
-load();
+ if(j.error) res.innerText=j.error;
+ else res.innerText="Risk: "+j.risk+"%";
+}}
 </script>
-
-</body>
-</html>
-""")
-
+"""
+    
 # ---------------- RUN ----------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT",10000))
+    app.run(host="0.0.0.0",port=port)
