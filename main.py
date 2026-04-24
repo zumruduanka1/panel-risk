@@ -30,49 +30,76 @@ def send_email(text, risk):
     except:
         pass
 
-# ---------------- HABER KONTROL (GÜÇLÜ) ----------------
+# ---------------- HABER KONTROL ----------------
 def is_news(text):
     if not text or len(text) < 30:
         return False
 
     keywords = [
-        "son dakika","iddia","açıklandı","haber","görüntü",
-        "rapor","uzman","paylaşıldı","olay","gündem"
+        "son dakika","iddia","açıklandı","haber",
+        "görüntü","rapor","uzman","gündem"
     ]
 
     score = sum(1 for k in keywords if k in text.lower())
-
     return score >= 1 or len(text.split()) > 7
 
-# ---------------- RISK ----------------
+# ---------------- REAL RISK ----------------
 def explain(text):
     t = text.lower()
-    r = []
+    reasons = []
 
-    if "şok" in t: r.append("abartılı dil")
-    if "gizli" in t: r.append("manipülasyon")
-    if "iddia" in t: r.append("doğrulanmamış bilgi")
-    if "herkes" in t: r.append("viral yayılım")
-    if "kanıtlandı" in t: r.append("kesinlik iddiası")
+    if "şok" in t:
+        reasons.append("abartılı başlık")
 
-    return r
+    if "iddia" in t:
+        reasons.append("doğrulanmamış iddia")
+
+    if "gizli" in t:
+        reasons.append("manipülatif ifade")
+
+    if "herkes" in t:
+        reasons.append("yayılım etkisi")
+
+    if "kanıtlandı" in t:
+        reasons.append("kanıt iddiası")
+
+    return reasons if reasons else ["düşük risk"]
 
 def risk(text):
     t = text.lower()
-    s = 20
+    score = 0
 
-    for k in ["şok","ifşa","gizli","kanıtlandı"]:
-        if k in t: s += 20
+    # manipülasyon
+    for k in ["şok","ifşa","gizli","inanılmaz","korkutan"]:
+        if k in t:
+            score += 15
 
-    for k in ["iddia","viral","herkes"]:
-        if k in t: s += 10
+    # iddia
+    if "iddia" in t:
+        score += 20
 
-    if "!" in text: s += 10
-    if len(text) < 40: s += 10
-    if len(text) > 80: s += 5
-    if "uzman" in t: s -= 10
+    # kesinlik
+    if "kanıtlandı" in t or "kesin" in t:
+        score += 25
 
-    return max(0, min(100, s))
+    # viral
+    if "herkes" in t or "viral" in t:
+        score += 15
+
+    # güven düşür
+    if "uzman" in t or "resmi" in t:
+        score -= 20
+
+    # uzunluk
+    if len(text) < 30:
+        score += 15
+    elif len(text) > 100:
+        score -= 10
+
+    # ünlem
+    score += text.count("!") * 5
+
+    return max(0, min(100, score))
 
 # ---------------- RSS ----------------
 def parse(url, source):
@@ -151,6 +178,11 @@ def refresh():
 
     for text, source, link in raw:
         r = risk(text)
+
+        # düşük riskleri biraz daha düşür (gerçek dağılım)
+        if explain(text) == ["düşük risk"]:
+            r = max(5, r - 20)
+
         total += 1
         avg += r
 
@@ -192,6 +224,9 @@ def analyze():
         return {"error": "Lütfen haber formatında bir içerik girin!"}
 
     r = risk(text)
+
+    if explain(text) == ["düşük risk"]:
+        r = max(5, r - 20)
 
     if r >= 80:
         send_email(text, r)
