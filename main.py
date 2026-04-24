@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, render_template_string
-import requests, smtplib, os, hashlib, time
+import requests, smtplib, os, time, hashlib
 import xml.etree.ElementTree as ET
 
 app = Flask(__name__)
@@ -12,13 +12,20 @@ last = 0
 # ---------------- EMAIL ----------------
 def send_email(text, risk):
     try:
+        sender = os.getenv("tubitaktest0@gmail.com")
+        password = os.getenv("umdyxtmpeljhodhy")
+        to = os.getenv("rumeyysauslu@gmail.com")
+
+        if not sender or not password or not to:
+            return
+
         s = smtplib.SMTP("smtp.gmail.com", 587)
         s.starttls()
-        s.login(os.getenv("tubitaktest0@gmail.com"), os.getenv("umdyxtmpeljhodhy"))
+        s.login(sender, password)
 
-        msg = f"Subject: 🚨 Yüksek Risk\n\n{text}\nRisk: {risk}"
+        msg = f"Subject: 🚨 Yüksek Riskli İçerik\n\n{text}\nRisk: {risk}"
 
-        s.sendmail(os.getenv("tubitaktest0@gmail.com"), os.getenv("rumeyysauslu@gmail.com"), msg)
+        s.sendmail(sender, to, msg)
         s.quit()
     except:
         pass
@@ -26,19 +33,18 @@ def send_email(text, risk):
 # ---------------- RSS ----------------
 def parse(url):
     try:
-        r = requests.get(url, timeout=5)
+        r = requests.get(url, timeout=6)
         root = ET.fromstring(r.content)
         return [i.find("title").text for i in root.findall(".//item")[:15]]
     except:
         return []
 
-# ---------------- SOSYAL MEDYA BENZERİ ----------------
-def google_search_sim():
-    # Google arama simülasyonu (yasal yaklaşım)
+# ---------------- SOSYAL MEDYA SİMÜLASYON ----------------
+def social_sim():
     return [
-        "site:x.com şok iddia hızla yayılıyor",
-        "site:instagram.com inanılmaz olay sosyal medyada",
-        "site:tiktok.com gizli gerçek ortaya çıktı",
+        "site:x.com şok iddia yayılıyor",
+        "site:instagram.com inanılmaz olay",
+        "site:tiktok.com gizli gerçek ortaya çıktı"
     ]
 
 def trends():
@@ -59,7 +65,7 @@ def get_news():
     data += parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr")
 
     data += trends()
-    data += google_search_sim()
+    data += social_sim()
 
     if len(data) < 5:
         data += [
@@ -71,23 +77,23 @@ def get_news():
     return data
 
 # ---------------- RISK ----------------
-def risk(text):
-    s = 30
+def calc_risk(text):
+    score = 30
     t = text.lower()
 
     keys = ["şok","acil","gizli","ifşa","iddia","herkes","yayılıyor"]
 
     for k in keys:
         if k in t:
-            s += 15
+            score += 15
 
     if "!" in text:
-        s += 10
+        score += 10
 
     if len(text) < 40:
-        s += 10
+        score += 10
 
-    return min(s,100)
+    return min(score, 100)
 
 # ---------------- REFRESH ----------------
 def refresh():
@@ -104,7 +110,7 @@ def refresh():
     safe = 0
 
     for n in get_news():
-        r = risk(n)
+        r = calc_risk(n)
         total += 1
 
         if r >= 50:
@@ -112,14 +118,14 @@ def refresh():
 
         if r >= 80:
             high += 1
-            h = hashlib.md5(n.encode()).hexdigest()
-            if h not in sent:
+            key = hashlib.md5(n.encode()).hexdigest()
+            if key not in sent:
                 send_email(n, r)
-                sent.add(h)
+                sent.add(key)
         else:
             safe += 1
 
-    cache = data[:15]
+    cache = data[:20]
     stats = {"total": total, "high": high, "safe": safe}
 
 # ---------------- API ----------------
@@ -131,7 +137,7 @@ def news():
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
     text = request.json.get("text")
-    r = risk(text)
+    r = calc_risk(text)
 
     if r >= 80:
         send_email(text, r)
@@ -145,6 +151,7 @@ def home():
 <html>
 <head>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
 <style>
 body{
  background:#020617;
@@ -152,19 +159,24 @@ body{
  font-family:Arial;
  padding:20px;
 }
+
 h1{
  text-align:center;
- font-size:40px;
+ font-size:42px;
 }
+
 .container{
  max-width:1000px;
  margin:auto;
 }
+
 .stats{
  display:flex;
- gap:15px;
+ gap:20px;
  justify-content:center;
+ margin-top:20px;
 }
+
 .box{
  background:#0f172a;
  padding:20px;
@@ -172,18 +184,21 @@ h1{
  width:150px;
  text-align:center;
 }
+
 .card{
  background:#0f172a;
- padding:15px;
- margin-top:15px;
+ padding:20px;
+ margin-top:20px;
  border-radius:15px;
 }
+
 input{
  width:100%;
  padding:10px;
  border-radius:10px;
  border:none;
 }
+
 button{
  margin-top:10px;
  padding:10px;
@@ -193,9 +208,11 @@ button{
  color:white;
  border-radius:10px;
 }
+
 .high{color:red;}
 .mid{color:orange;}
 .low{color:lightgreen;}
+
 canvas{
  max-width:250px;
  margin:auto;
@@ -217,7 +234,7 @@ canvas{
 </div>
 
 <div class="card">
-<input id="txt" placeholder="Metin gir">
+<input id="txt" placeholder="Haber gir...">
 <button onclick="analyze()">Analiz</button>
 <h3 id="res"></h3>
 <canvas id="chart"></canvas>
@@ -254,9 +271,12 @@ async function analyze(){
 
  if(chart) chart.destroy();
 
- chart=new Chart(chart=document.getElementById("chart"),{
+ chart=new Chart(document.getElementById("chart"),{
   type:"doughnut",
-  data:{labels:["Risk","Safe"],datasets:[{data:[j.risk,100-j.risk]}]}
+  data:{
+    labels:["Risk","Güvenli"],
+    datasets:[{data:[j.risk,100-j.risk]}]
+  }
  });
 }
 
@@ -278,7 +298,6 @@ async function load(){
 
 setInterval(load,4000);
 load();
-
 </script>
 
 </body>
