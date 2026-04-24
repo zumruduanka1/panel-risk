@@ -5,27 +5,26 @@ import xml.etree.ElementTree as ET
 app = Flask(__name__)
 
 cache = []
-stats = {"total": 0, "high": 0, "safe": 0}
+stats = {"total": 0, "danger": 0, "safe": 0}
 sent = set()
 last = 0
 
 # ---------------- EMAIL ----------------
 def send_email(text, risk):
     try:
-        sender = os.getenv("tubitaktest0@gmail.com")
-        password = os.getenv("umdyxtmpeljhodhy")
+        user = os.getenv("tubitaktest0@gmail.com")
+        pw = os.getenv("umdyxtmpeljhodhy")
         to = os.getenv("rumeyysauslu@gmail.com")
 
-        if not sender or not password or not to:
+        if not user or not pw or not to:
             return
 
         s = smtplib.SMTP("smtp.gmail.com", 587)
         s.starttls()
-        s.login(sender, password)
+        s.login(user, pw)
 
-        msg = f"Subject: 🚨 Yüksek Riskli İçerik\n\n{text}\nRisk: {risk}"
-
-        s.sendmail(sender, to, msg)
+        msg = f"Subject: 🚨 Yüksek Risk\n\n{text}\nRisk: {risk}%"
+        s.sendmail(user, to, msg)
         s.quit()
     except:
         pass
@@ -33,67 +32,54 @@ def send_email(text, risk):
 # ---------------- RSS ----------------
 def parse(url):
     try:
-        r = requests.get(url, timeout=6)
+        r = requests.get(url, timeout=5)
         root = ET.fromstring(r.content)
-        return [i.find("title").text for i in root.findall(".//item")[:15]]
+        return [i.find("title").text for i in root.findall(".//item")[:10]]
     except:
         return []
 
-# ---------------- SOSYAL MEDYA SİMÜLASYON ----------------
+# ---------------- DATA ----------------
 def social_sim():
     return [
-        "site:x.com şok iddia yayılıyor",
-        "site:instagram.com inanılmaz olay",
-        "site:tiktok.com gizli gerçek ortaya çıktı"
+        "site:x.com şok iddia hızla yayılıyor",
+        "site:instagram.com inanılmaz olay ortaya çıktı",
+        "site:tiktok.com gizli gerçek ifşa edildi"
     ]
 
 def trends():
     try:
         r = requests.get("https://trends.google.com/trends/trendingsearches/daily/rss?geo=TR").text
-        items = r.split("<title>")[1:10]
-        return [i.split("</title>")[0] for i in items]
+        return [i.split("</title>")[0] for i in r.split("<title>")[1:10]]
     except:
         return []
 
-# ---------------- KAYNAKLAR ----------------
-def get_news():
+def collect():
     data = []
-
     data += parse("https://teyit.org/feed")
     data += parse("https://www.dogrulukpayi.com/rss.xml")
-    data += parse("https://malumatfurus.org/feed")
     data += parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr")
-
     data += trends()
     data += social_sim()
-
-    if len(data) < 5:
-        data += [
-            "ŞOK HABER herkes paylaşıyor",
-            "Gizli bilgi ortaya çıktı",
-            "İnanılmaz olay yayılıyor"
-        ]
-
     return data
 
 # ---------------- RISK ----------------
-def calc_risk(text):
-    score = 30
+def risk_score(text):
+    s = 30
     t = text.lower()
 
-    keys = ["şok","acil","gizli","ifşa","iddia","herkes","yayılıyor"]
+    keywords = ["şok","gizli","ifşa","iddia","herkes","yayılıyor"]
 
-    for k in keys:
+    for k in keywords:
         if k in t:
-            score += 15
+            s += 15
 
     if "!" in text:
-        score += 10
+        s += 10
 
     if len(text) < 40:
-        score += 10
+        s += 10
 
-    return min(score, 100)
+    return min(s,100)
 
 # ---------------- REFRESH ----------------
 def refresh():
@@ -104,29 +90,31 @@ def refresh():
 
     last = time.time()
 
-    data = []
+    raw = collect()
+
+    out = []
     total = 0
-    high = 0
+    danger = 0
     safe = 0
 
-    for n in get_news():
-        r = calc_risk(n)
+    for item in raw:
+        r = risk_score(item)
         total += 1
 
         if r >= 50:
-            data.append({"title": n, "risk": r})
+            out.append({"text": item, "risk": r})
 
         if r >= 80:
-            high += 1
-            key = hashlib.md5(n.encode()).hexdigest()
-            if key not in sent:
-                send_email(n, r)
-                sent.add(key)
+            danger += 1
+            h = hashlib.md5(item.encode()).hexdigest()
+            if h not in sent:
+                send_email(item, r)
+                sent.add(h)
         else:
             safe += 1
 
-    cache = data[:20]
-    stats = {"total": total, "high": high, "safe": safe}
+    cache = out[:20]
+    stats = {"total": total, "danger": danger, "safe": safe}
 
 # ---------------- API ----------------
 @app.route("/api/news")
@@ -137,7 +125,7 @@ def news():
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
     text = request.json.get("text")
-    r = calc_risk(text)
+    r = risk_score(text)
 
     if r >= 80:
         send_email(text, r)
@@ -153,102 +141,54 @@ def home():
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <style>
-body{
- background:#020617;
- color:white;
- font-family:Arial;
- padding:20px;
-}
-
-h1{
- text-align:center;
- font-size:42px;
-}
-
-.container{
- max-width:1000px;
- margin:auto;
-}
-
-.stats{
- display:flex;
- gap:20px;
- justify-content:center;
- margin-top:20px;
-}
-
-.box{
- background:#0f172a;
- padding:20px;
- border-radius:15px;
- width:150px;
- text-align:center;
-}
-
-.card{
- background:#0f172a;
- padding:20px;
- margin-top:20px;
- border-radius:15px;
-}
-
-input{
- width:100%;
- padding:10px;
- border-radius:10px;
- border:none;
-}
-
-button{
- margin-top:10px;
- padding:10px;
- width:100%;
- border:none;
- background:#2563eb;
- color:white;
- border-radius:10px;
-}
-
-.high{color:red;}
-.mid{color:orange;}
-.low{color:lightgreen;}
-
-canvas{
- max-width:250px;
- margin:auto;
- display:block;
-}
+body{background:#020617;color:white;font-family:Arial;padding:20px;}
+.container{max-width:1100px;margin:auto;}
+.title{text-align:center;font-size:40px;}
+.stats{display:flex;justify-content:center;gap:20px;margin:20px;}
+.box{background:#0f172a;padding:20px;border-radius:12px;width:150px;text-align:center;}
+.panel{display:flex;gap:20px;}
+.card{background:#0f172a;padding:20px;border-radius:12px;flex:1;}
+input{width:100%;padding:10px;border-radius:10px;border:none;}
+button{margin-top:10px;padding:10px;width:100%;background:#2563eb;border:none;border-radius:10px;color:white;}
+.high{color:red;} .mid{color:orange;} .low{color:lightgreen;}
 </style>
 </head>
 
 <body>
-
 <div class="container">
 
-<h1>Dezenformasyona Karşı Yapay Zeka</h1>
+<div class="title">AI Risk Dashboard</div>
 
 <div class="stats">
 <div class="box">Toplam<br><b id="t">0</b></div>
-<div class="box">Riskli<br><b id="h">0</b></div>
+<div class="box">Tehlikeli<br><b id="d">0</b></div>
 <div class="box">Güvenli<br><b id="s">0</b></div>
 </div>
 
+<div class="panel">
+
 <div class="card">
-<input id="txt" placeholder="Haber gir...">
+<h3>Yeni Analiz</h3>
+<input id="txt">
 <button onclick="analyze()">Analiz</button>
 <h3 id="res"></h3>
 <canvas id="chart"></canvas>
 </div>
 
 <div class="card">
-<h2>Son Analizler</h2>
+<h3>Filtre (Risk ≥ <span id="fval">50</span>)</h3>
+<input type="range" min="0" max="100" value="50" id="filter" oninput="load()">
+<h3>Haberler</h3>
 <div id="news"></div>
+<canvas id="bar"></canvas>
+</div>
+
 </div>
 
 </div>
 
 <script>
-let chart;
+let donut, bar;
 
 function color(r){
  if(r>=80) return "high";
@@ -269,14 +209,11 @@ async function analyze(){
 
  res.innerHTML="Risk: <span class='"+color(j.risk)+"'>"+j.risk+"%</span>";
 
- if(chart) chart.destroy();
+ if(donut) donut.destroy();
 
- chart=new Chart(document.getElementById("chart"),{
+ donut=new Chart(chart,{
   type:"doughnut",
-  data:{
-    labels:["Risk","Güvenli"],
-    datasets:[{data:[j.risk,100-j.risk]}]
-  }
+  data:{labels:["Risk","Safe"],datasets:[{data:[j.risk,100-j.risk]}]}
  });
 }
 
@@ -284,16 +221,34 @@ async function load(){
  let r=await fetch("/api/news");
  let j=await r.json();
 
+ let f = document.getElementById("filter").value;
+ document.getElementById("fval").innerText=f;
+
  t.innerText=j.stats.total;
- h.innerText=j.stats.high;
+ d.innerText=j.stats.danger;
  s.innerText=j.stats.safe;
 
  let html="";
+ let risks=[];
+
  j.data.forEach(n=>{
-  html+=`<p>${n.title}<br><span class="${color(n.risk)}">${n.risk}%</span></p>`;
+  if(n.risk>=f){
+    html+=`<p>${n.text}<br><span class="${color(n.risk)}">${n.risk}%</span></p>`;
+    risks.push(n.risk);
+  }
  });
 
  news.innerHTML=html;
+
+ if(bar) bar.destroy();
+
+ bar=new Chart(document.getElementById("bar"),{
+  type:"bar",
+  data:{
+    labels: risks.map((_,i)=>"H"+i),
+    datasets:[{label:"Risk",data:risks}]
+  }
+ });
 }
 
 setInterval(load,4000);
