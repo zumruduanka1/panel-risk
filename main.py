@@ -1,29 +1,13 @@
 from flask import Flask, request, jsonify, render_template_string
-import sqlite3, requests, time, hashlib, random, os, smtplib
+import requests, random, time, hashlib, os, smtplib
 import xml.etree.ElementTree as ET
-
-# AI MODEL (light)
-try:
-    from transformers import pipeline
-    classifier = pipeline("text-classification", model="distilbert-base-uncased-finetuned-sst-2-english")
-except:
-    classifier = None
 
 app = Flask(__name__)
 
-# ---------------- DATABASE ----------------
-def db():
-    conn = sqlite3.connect("data.db")
-    conn.execute("""
-    CREATE TABLE IF NOT EXISTS news(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        text TEXT,
-        risk INTEGER,
-        source TEXT,
-        link TEXT
-    )
-    """)
-    return conn
+cache = []
+stats = {"total":0,"risk":0,"safe":0}
+sent = set()
+last = 0
 
 # ---------------- EMAIL ----------------
 def send_email(text, risk):
@@ -45,62 +29,79 @@ def send_email(text, risk):
     except:
         pass
 
-# ---------------- FILTER ----------------
+# ---------------- NEWS CHECK ----------------
 def is_news(text):
-    if not text or len(text) < 20:
+    if not text or len(text)<20:
         return False
 
-    keys = ["iddia","son dakika","açıklandı","haber","video"]
-    return any(k in text.lower() for k in keys) or len(text.split()) > 6
+    keys=["iddia","son dakika","açıklandı","haber","video","görüntü"]
+    return any(k in text.lower() for k in keys) or len(text.split())>6
 
-# ---------------- AI RISK ----------------
-def ai_score(text):
-    if classifier:
-        try:
-            res = classifier(text[:200])[0]
-            if res["label"] == "NEGATIVE":
-                return min(90, int(res["score"] * 100))
-            else:
-                return int((1 - res["score"]) * 50)
-        except:
-            pass
+# ---------------- AI ----------------
+def explain(text):
+    t=text.lower()
+    r=[]
 
-    # fallback
-    s = 30
-    if "şok" in text.lower(): s += 20
-    if "gizli" in text.lower(): s += 15
-    if "!" in text: s += 10
-    return min(s, 100)
+    if "şok" in t: r.append("clickbait")
+    if "gizli" in t: r.append("manipülasyon")
+    if "herkes" in t: r.append("viral yayılım")
+    if "iddia" in t: r.append("doğrulanmamış")
 
-# ---------------- DATA ----------------
+    return r
+
+def risk(text):
+    t=text.lower()
+    s=20
+
+    for k in ["şok","ifşa","gizli","kanıtlandı"]:
+        if k in t: s+=20
+
+    for k in ["iddia","viral","herkes","paylaşılıyor"]:
+        if k in t: s+=10
+
+    if "!" in text: s+=10
+    if len(text)<30: s+=10
+
+    return min(100,s)
+
+# ---------------- RSS ----------------
 def parse(url, source):
-    data = []
+    data=[]
     try:
-        r = requests.get(url, timeout=5)
-        root = ET.fromstring(r.content)
+        r=requests.get(url,timeout=5)
+        root=ET.fromstring(r.content)
+
         for i in root.findall(".//item")[:10]:
-            data.append((i.find("title").text, source, i.find("link").text))
+            data.append((i.find("title").text,source,i.find("link").text))
     except:
         pass
     return data
 
+# ---------------- SOCIAL ----------------
 def social():
-    t = [
-        "SON DAKİKA: deprem hakkında şok iddia!",
-        "aşı ile ilgili gizli gerçek ortaya çıktı",
-        "herkes bunu konuşuyor dikkat edin"
+    konular=["deprem","aşı","seçim","ekonomi","savaş","teknoloji"]
+    duygular=["şok","gizli","ifşa","inanılmaz","korkutan"]
+
+    templates=[
+        "SON DAKİKA: {k} hakkında {d} iddia!",
+        "{k} ile ilgili {d} görüntüler ortaya çıktı",
+        "{k} sosyal medyada viral oldu",
+        "{k} hakkında herkes bunu konuşuyor",
+        "Uzmanlar uyardı: {k} tehlikeli olabilir",
     ]
-    return [(random.choice(t),"Sosyal","#") for _ in range(30)]
 
+    return [(random.choice(templates).format(k=random.choice(konular),d=random.choice(duygular)),"Sosyal","#") for _ in range(40)]
+
+# ---------------- COLLECT ----------------
 def collect():
-    data = []
-    data += parse("https://teyit.org/feed","Teyit")
-    data += parse("https://www.dogrulukpayi.com/rss.xml","Doğruluk")
-    data += parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr","Google")
-    data += social()
+    data=[]
+    data+=parse("https://teyit.org/feed","Teyit")
+    data+=parse("https://www.dogrulukpayi.com/rss.xml","Doğruluk")
+    data+=parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr","Google News")
+    data+=social()
 
-    seen = set()
-    unique = []
+    seen=set()
+    unique=[]
 
     for d in data:
         if d[0] not in seen:
@@ -111,47 +112,64 @@ def collect():
 
 # ---------------- REFRESH ----------------
 def refresh():
-    data = collect()
-    conn = db()
+    global cache, stats, last
 
-    for text, source, link in data:
-        r = ai_score(text)
+    if time.time()-last<5:
+        return
 
-        conn.execute(
-            "INSERT INTO news(text,risk,source,link) VALUES(?,?,?,?)",
-            (text, r, source, link)
-        )
+    last=time.time()
+    raw=collect()
 
-        if r >= 80:
-            send_email(text, r)
+    out=[]
+    total=0
+    risk_c=0
+    safe=0
 
-    conn.commit()
-    conn.close()
+    for text,source,link in raw:
+        r=risk(text)
+        total+=1
+
+        if r>=50:
+            out.append({
+                "text":text,
+                "risk":r,
+                "source":source,
+                "link":link,
+                "reasons":explain(text)
+            })
+            risk_c+=1
+        else:
+            safe+=1
+
+        if r>=80:
+            h=hashlib.md5(text.encode()).hexdigest()
+            if h not in sent:
+                send_email(text,r)
+                sent.add(h)
+
+    cache=out[:40]
+    stats={"total":total,"risk":risk_c,"safe":safe}
 
 # ---------------- API ----------------
 @app.route("/api/news")
 def news():
     refresh()
+    return {"data":cache,"stats":stats}
 
-    conn = db()
-    rows = conn.execute("SELECT text,risk,source,link FROM news ORDER BY id DESC LIMIT 50").fetchall()
-    conn.close()
-
-    return {"data":[{"text":r[0],"risk":r[1],"source":r[2],"link":r[3]} for r in rows]}
-
-@app.route("/api/analyze", methods=["POST"])
+@app.route("/api/analyze",methods=["POST"])
 def analyze():
-    text = request.json.get("text")
+    text=request.json.get("text")
 
     if not is_news(text):
         return {"error":"Sadece haber içerikleri analiz edilir!"}
 
-    r = ai_score(text)
+    r=risk(text)
+    reasons=explain(text)
 
-    if r >= 80:
-        send_email(text, r)
+    if r>=80:
+        send_email(text,r)
 
-    return {"risk": r}
+    return {"risk":r,"reasons":reasons}
 
 # ---------------- UI ----------------
 @app.route("/")
@@ -162,6 +180,7 @@ def home():
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 body{background:#020617;color:white;font-family:Arial;padding:20px;}
+.container{max-width:1100px;margin:auto;}
 .card{background:#0f172a;padding:15px;border-radius:10px;margin:10px;}
 .high{color:red;} .mid{color:orange;} .low{color:green;}
 </style>
@@ -169,14 +188,28 @@ body{background:#020617;color:white;font-family:Arial;padding:20px;}
 
 <body>
 
-<h1>ULTRA AI Fake News</h1>
+<div class="container">
 
-<input id="txt">
+<h1>AI Fake News Dashboard</h1>
+
+<div class="card">
+<input id="txt" placeholder="Haber gir">
 <button onclick="analyze()">Analiz</button>
 <h3 id="res"></h3>
 <canvas id="chart"></canvas>
+</div>
 
+<div class="card">
+<h3>İstatistik</h3>
+<p id="stats"></p>
+</div>
+
+<div class="card">
+<h3>En Riskli Haberler</h3>
 <div id="news"></div>
+</div>
+
+</div>
 
 <script>
 let chart;
@@ -188,7 +221,7 @@ function color(r){
 }
 
 async function analyze(){
- let t=document.getElementById("txt").value;
+ let t=txt.value;
 
  let r=await fetch("/api/analyze",{
   method:"POST",
@@ -203,7 +236,7 @@ async function analyze(){
   return;
  }
 
- res.innerHTML=j.risk+"%";
+ res.innerHTML=j.risk+"% ("+j.reasons.join(", ")+")";
 
  if(chart) chart.destroy();
 
@@ -217,20 +250,23 @@ async function load(){
  let r=await fetch("/api/news");
  let j=await r.json();
 
+ stats.innerHTML="Toplam: "+j.stats.total+" | Riskli: "+j.stats.risk;
+
  let html="";
  j.data.forEach(n=>{
   html+=`
   <div class="card">
   <a href="${n.link}" target="_blank">${n.text}</a><br>
   <span class="${color(n.risk)}">${n.risk}%</span>
-  <br>${n.source}
+  <br><small>${n.source}</small>
+  <br><small>${n.reasons.join(", ")}</small>
   </div>`;
  });
 
  news.innerHTML=html;
 }
 
-setInterval(load,5000);
+setInterval(load,4000);
 load();
 </script>
 
@@ -240,5 +276,5 @@ load();
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    port=int(os.environ.get("PORT",10000))
+    app.run(host="0.0.0.0",port=port)
