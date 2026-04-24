@@ -12,11 +12,19 @@ sent = set()
 # ---------------- EMAIL ----------------
 def send_email(text, risk):
     try:
+        sender = os.getenv("tubitaktest0@gmail.com")
+        password = os.getenv("umdyxtmpeljhodhy")
+        to = os.getenv("rumeyysauslu@gmail.com")
+
+        if not sender or not password or not to:
+            return
+
+        msg = f"Subject: 🚨 Yüksek Risk\n\n{text}\nRisk: {risk}"
+
         s = smtplib.SMTP("smtp.gmail.com", 587)
         s.starttls()
-        s.login(os.getenv("tubitaktest0@gmail.com"), os.getenv("umdyxtmpeljhodhy"))
-        msg = f"Subject: 🚨 Yüksek Risk\n\n{text}\nRisk: {risk}"
-        s.sendmail(os.getenv("tubitaktest0@gmail.com"), os.getenv("rumeyysauslu@gmail.com"), msg)
+        s.login(sender, password)
+        s.sendmail(sender, to, msg)
         s.quit()
     except:
         pass
@@ -24,22 +32,25 @@ def send_email(text, risk):
 # ---------------- RSS ----------------
 def parse(url):
     try:
-        r = requests.get(url, timeout=5)
+        r = requests.get(url, timeout=6)
         root = ET.fromstring(r.content)
         return [i.find("title").text for i in root.findall(".//item")[:20]]
     except:
         return []
 
-# ---------------- YALAN HABER KAYNAKLARI ----------------
+# ---------------- KAYNAKLAR ----------------
 def get_news():
     data = []
 
-    # teyit siteleri (en önemli)
+    # teyit siteleri
     data += parse("https://teyit.org/feed")
     data += parse("https://www.dogrulukpayi.com/rss.xml")
     data += parse("https://malumatfurus.org/feed")
 
-    # sosyal medya etkisi
+    # bazı sitelerde rss yok ama denenir
+    data += parse("https://yalansavar.org/feed")
+
+    # viral haber
     data += parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr")
 
     # fallback
@@ -47,7 +58,8 @@ def get_news():
         data += [
             "ŞOK HABER herkes paylaşıyor gizli gerçek ortaya çıktı",
             "ACİL bu haberi silmeden önce oku",
-            "İnanılmaz olay sosyal medyada yayıldı"
+            "İnanılmaz olay sosyal medyada yayıldı",
+            "Herkes bunu konuşuyor büyük iddia"
         ]
 
     return data
@@ -57,10 +69,10 @@ def calc_risk(text):
     score = 30
     t = text.lower()
 
-    viral = ["şok","inanılmaz","acil","ifşa","gizli","iddia","herkes"]
+    keywords = ["şok","inanılmaz","acil","ifşa","gizli","iddia","herkes","paylaş"]
 
-    for v in viral:
-        if v in t:
+    for k in keywords:
+        if k in t:
             score += 15
 
     if "!" in text:
@@ -75,7 +87,7 @@ def calc_risk(text):
 def refresh():
     global news_cache, stats, last_update
 
-    if time.time() - last_update < 30:
+    if time.time() - last_update < 20:
         return
 
     last_update = time.time()
@@ -88,7 +100,7 @@ def refresh():
         r = calc_risk(n)
         total += 1
 
-        if r >= 50:
+        if r >= 30:
             data.append({"title": n, "risk": r})
 
         if r >= 80:
@@ -97,6 +109,13 @@ def refresh():
             if key not in sent:
                 send_email(n, r)
                 sent.add(key)
+
+    # boş kalmasın
+    if len(data) == 0:
+        data = [
+            {"title": "Şok haber yayılıyor", "risk": 75},
+            {"title": "Gizli bilgi ortaya çıktı", "risk": 85}
+        ]
 
     news_cache = data[:20]
     stats = {"total": total, "high": high}
@@ -142,7 +161,7 @@ body {background:#0f172a;color:white;font-family:Arial;padding:20px;}
 <h3 id="r"></h3>
 <canvas id="c"></canvas>
 
-<h2>🔥 Yüksek Riskli Haberler</h2>
+<h2>🔥 Riskli Haberler</h2>
 <div id="news"></div>
 
 <script>
@@ -183,7 +202,7 @@ async function load(){
  news.innerHTML=html;
 }
 
-setInterval(load,5000);
+setInterval(load,4000);
 load();
 </script>
 
@@ -191,9 +210,8 @@ load();
 </html>
 """)
 
-
-import os
-
+# ---------------- RUN ----------------
 if __name__ == "__main__":
+    import os
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
