@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import xml.etree.ElementTree as ET
 
 app = Flask(__name__)
-app.secret_key = "secret123"
+app.secret_key = "defans_secret"
 
 # ---------------- DB ----------------
 def init_db():
@@ -34,7 +34,7 @@ def send_email(text, risk):
         s.starttls()
         s.login(user, pw)
 
-        msg = f"Subject: 🚨 Risk Alert\n\n{text}\nRisk: {risk}%"
+        msg = f"Subject: 🚨 DEFANS ALERT\n\n{text}\nRisk: {risk}%"
         s.sendmail(user, to, msg)
         s.quit()
     except:
@@ -158,6 +158,7 @@ def refresh():
 
     for text, source, link in data:
         r = risk_score(text)
+
         if r >= 50:
             out.append({"text":text,"risk":r,"source":source,"link":link})
 
@@ -252,7 +253,12 @@ def home():
     items = "".join([f"<li>{t} - %{r}</li>" for t,r in data])
 
     return f"""
-    <h1>Fake News Dashboard</h1>
+    <html>
+    <head><title>DEFANS</title></head>
+    <body style="background:black;color:white;font-family:Arial">
+
+    <h1>DEFANS - Fake News Shield</h1>
+
     <a href='/logout'>Çıkış</a><br><br>
 
     <input id='txt'>
@@ -272,8 +278,11 @@ async function go(){{
  else res.innerText="Risk: "+j.risk+"%";
 }}
 </script>
+
+</body>
+</html>
 """
-    
+
 # ---------------- RUN ----------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT",10000))
