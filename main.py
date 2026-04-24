@@ -4,27 +4,21 @@ import xml.etree.ElementTree as ET
 
 app = Flask(__name__)
 
-news_cache = []
-stats = {"total": 0, "high": 0}
-last_update = 0
+cache = []
+stats = {"total": 0, "high": 0, "safe": 0}
 sent = set()
+last = 0
 
 # ---------------- EMAIL ----------------
 def send_email(text, risk):
     try:
-        sender = os.getenv("tubitaktest0@gmail.com")
-        password = os.getenv("umdyxtmpeljhodhy")
-        to = os.getenv("rumeyysauslu@gmail.com")
-
-        if not sender or not password or not to:
-            return
+        s = smtplib.SMTP("smtp.gmail.com", 587)
+        s.starttls()
+        s.login(os.getenv("tubitaktest0@gmail.com"), os.getenv("umdyxtmpeljhodhy"))
 
         msg = f"Subject: 🚨 Yüksek Risk\n\n{text}\nRisk: {risk}"
 
-        s = smtplib.SMTP("smtp.gmail.com", 587)
-        s.starttls()
-        s.login(sender, password)
-        s.sendmail(sender, to, msg)
+        s.sendmail(os.getenv("tubitaktest0@gmail.com"), os.getenv("rumeyysauslu@gmail.com"), msg)
         s.quit()
     except:
         pass
@@ -32,9 +26,26 @@ def send_email(text, risk):
 # ---------------- RSS ----------------
 def parse(url):
     try:
-        r = requests.get(url, timeout=6)
+        r = requests.get(url, timeout=5)
         root = ET.fromstring(r.content)
-        return [i.find("title").text for i in root.findall(".//item")[:20]]
+        return [i.find("title").text for i in root.findall(".//item")[:15]]
+    except:
+        return []
+
+# ---------------- SOSYAL MEDYA BENZERİ ----------------
+def google_search_sim():
+    # Google arama simülasyonu (yasal yaklaşım)
+    return [
+        "site:x.com şok iddia hızla yayılıyor",
+        "site:instagram.com inanılmaz olay sosyal medyada",
+        "site:tiktok.com gizli gerçek ortaya çıktı",
+    ]
+
+def trends():
+    try:
+        r = requests.get("https://trends.google.com/trends/trendingsearches/daily/rss?geo=TR").text
+        items = r.split("<title>")[1:10]
+        return [i.split("</title>")[0] for i in items]
     except:
         return []
 
@@ -42,94 +53,85 @@ def parse(url):
 def get_news():
     data = []
 
-    # teyit siteleri
     data += parse("https://teyit.org/feed")
     data += parse("https://www.dogrulukpayi.com/rss.xml")
     data += parse("https://malumatfurus.org/feed")
-
-    # bazı sitelerde rss yok ama denenir
-    data += parse("https://yalansavar.org/feed")
-
-    # viral haber
     data += parse("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr")
 
-    # fallback
+    data += trends()
+    data += google_search_sim()
+
     if len(data) < 5:
         data += [
-            "ŞOK HABER herkes paylaşıyor gizli gerçek ortaya çıktı",
-            "ACİL bu haberi silmeden önce oku",
-            "İnanılmaz olay sosyal medyada yayıldı",
-            "Herkes bunu konuşuyor büyük iddia"
+            "ŞOK HABER herkes paylaşıyor",
+            "Gizli bilgi ortaya çıktı",
+            "İnanılmaz olay yayılıyor"
         ]
 
     return data
 
 # ---------------- RISK ----------------
-def calc_risk(text):
-    score = 30
+def risk(text):
+    s = 30
     t = text.lower()
 
-    keywords = ["şok","inanılmaz","acil","ifşa","gizli","iddia","herkes","paylaş"]
+    keys = ["şok","acil","gizli","ifşa","iddia","herkes","yayılıyor"]
 
-    for k in keywords:
+    for k in keys:
         if k in t:
-            score += 15
+            s += 15
 
     if "!" in text:
-        score += 10
+        s += 10
 
     if len(text) < 40:
-        score += 10
+        s += 10
 
-    return min(score, 100)
+    return min(s,100)
 
 # ---------------- REFRESH ----------------
 def refresh():
-    global news_cache, stats, last_update
+    global cache, stats, last
 
-    if time.time() - last_update < 20:
+    if time.time() - last < 20:
         return
 
-    last_update = time.time()
+    last = time.time()
 
     data = []
     total = 0
     high = 0
+    safe = 0
 
     for n in get_news():
-        r = calc_risk(n)
+        r = risk(n)
         total += 1
 
-        if r >= 30:
+        if r >= 50:
             data.append({"title": n, "risk": r})
 
         if r >= 80:
             high += 1
-            key = hashlib.md5(n.encode()).hexdigest()
-            if key not in sent:
+            h = hashlib.md5(n.encode()).hexdigest()
+            if h not in sent:
                 send_email(n, r)
-                sent.add(key)
+                sent.add(h)
+        else:
+            safe += 1
 
-    # boş kalmasın
-    if len(data) == 0:
-        data = [
-            {"title": "Şok haber yayılıyor", "risk": 75},
-            {"title": "Gizli bilgi ortaya çıktı", "risk": 85}
-        ]
-
-    news_cache = data[:20]
-    stats = {"total": total, "high": high}
+    cache = data[:15]
+    stats = {"total": total, "high": high, "safe": safe}
 
 # ---------------- API ----------------
 @app.route("/api/news")
 def news():
     refresh()
-    return {"data": news_cache, "stats": stats}
+    return {"data": cache, "stats": stats}
 
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
     text = request.json.get("text")
-    r = calc_risk(text)
+    r = risk(text)
 
     if r >= 80:
         send_email(text, r)
@@ -144,30 +146,100 @@ def home():
 <head>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-body {background:#0f172a;color:white;font-family:Arial;padding:20px;}
-.card {background:#1e293b;padding:10px;margin:10px;border-radius:10px;}
+body{
+ background:#020617;
+ color:white;
+ font-family:Arial;
+ padding:20px;
+}
+h1{
+ text-align:center;
+ font-size:40px;
+}
+.container{
+ max-width:1000px;
+ margin:auto;
+}
+.stats{
+ display:flex;
+ gap:15px;
+ justify-content:center;
+}
+.box{
+ background:#0f172a;
+ padding:20px;
+ border-radius:15px;
+ width:150px;
+ text-align:center;
+}
+.card{
+ background:#0f172a;
+ padding:15px;
+ margin-top:15px;
+ border-radius:15px;
+}
+input{
+ width:100%;
+ padding:10px;
+ border-radius:10px;
+ border:none;
+}
+button{
+ margin-top:10px;
+ padding:10px;
+ width:100%;
+ border:none;
+ background:#2563eb;
+ color:white;
+ border-radius:10px;
+}
+.high{color:red;}
+.mid{color:orange;}
+.low{color:lightgreen;}
+canvas{
+ max-width:250px;
+ margin:auto;
+ display:block;
+}
 </style>
 </head>
 
 <body>
 
-<h1>🚨 Yalan Haber Paneli</h1>
+<div class="container">
 
-<p>Analiz: <span id="t">0</span> | 80+: <span id="h">0</span></p>
+<h1>Dezenformasyona Karşı Yapay Zeka</h1>
 
-<input id="txt">
-<button onclick="a()">Analiz</button>
+<div class="stats">
+<div class="box">Toplam<br><b id="t">0</b></div>
+<div class="box">Riskli<br><b id="h">0</b></div>
+<div class="box">Güvenli<br><b id="s">0</b></div>
+</div>
 
-<h3 id="r"></h3>
-<canvas id="c"></canvas>
+<div class="card">
+<input id="txt" placeholder="Metin gir">
+<button onclick="analyze()">Analiz</button>
+<h3 id="res"></h3>
+<canvas id="chart"></canvas>
+</div>
 
-<h2>🔥 Riskli Haberler</h2>
+<div class="card">
+<h2>Son Analizler</h2>
 <div id="news"></div>
+</div>
+
+</div>
 
 <script>
 let chart;
 
-async function a(){
+function color(r){
+ if(r>=80) return "high";
+ if(r>=50) return "mid";
+ return "low";
+}
+
+async function analyze(){
  let t=document.getElementById("txt").value;
 
  let r=await fetch("/api/analyze",{
@@ -178,12 +250,13 @@ async function a(){
 
  let j=await r.json();
 
- document.getElementById("r").innerText="Risk:"+j.risk;
+ res.innerHTML="Risk: <span class='"+color(j.risk)+"'>"+j.risk+"%</span>";
 
  if(chart) chart.destroy();
- chart=new Chart(c,{
+
+ chart=new Chart(chart=document.getElementById("chart"),{
   type:"doughnut",
-  data:{labels:["risk","safe"],datasets:[{data:[j.risk,100-j.risk]}]}
+  data:{labels:["Risk","Safe"],datasets:[{data:[j.risk,100-j.risk]}]}
  });
 }
 
@@ -193,10 +266,11 @@ async function load(){
 
  t.innerText=j.stats.total;
  h.innerText=j.stats.high;
+ s.innerText=j.stats.safe;
 
  let html="";
  j.data.forEach(n=>{
-  html+=`<div class="card">${n.title}<br>Risk:${n.risk}</div>`;
+  html+=`<p>${n.title}<br><span class="${color(n.risk)}">${n.risk}%</span></p>`;
  });
 
  news.innerHTML=html;
@@ -204,6 +278,7 @@ async function load(){
 
 setInterval(load,4000);
 load();
+
 </script>
 
 </body>
@@ -212,6 +287,5 @@ load();
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
