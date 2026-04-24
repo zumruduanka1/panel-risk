@@ -1,3 +1,8 @@
-flask
+Flask
 requests
-gunicorn
+psycopg2-binary
+redis
+rq
+python-dotenv
+transformers
+torch
